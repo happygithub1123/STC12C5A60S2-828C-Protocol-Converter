@@ -732,7 +732,7 @@ static void AppComm_StartSession(uint8 id)
 }
 
 /**
- * @brief  回复当前输入快照对应的模号，不改变测试会话
+ * @brief  按 828C 协议用 Result JSON 回复模号，不改变测试会话
  * @param  id 唯一有效模号，0 表示输入无效
  * @retval 无
  */
@@ -741,16 +741,16 @@ static void AppComm_ReplyModule(uint8 id)
     switch (id)
     {
         case 1u:
-            g_reply = "(START,1)\r\n";
+            g_reply = "{\"Result\":\"1\"}\r\n";
             break;
         case 2u:
-            g_reply = "(START,2)\r\n";
+            g_reply = "{\"Result\":\"2\"}\r\n";
             break;
         case 3u:
-            g_reply = "(START,3)\r\n";
+            g_reply = "{\"Result\":\"3\"}\r\n";
             break;
         case 4u:
-            g_reply = "(START,4)\r\n";
+            g_reply = "{\"Result\":\"4\"}\r\n";
             break;
         default:
             g_reply = g_err_text; // 查询失败只回复 ERR，不终止已有会话

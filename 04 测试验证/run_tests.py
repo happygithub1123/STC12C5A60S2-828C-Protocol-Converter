@@ -89,6 +89,10 @@ def frame(name, value, result='NG', module=1):
                        ensure_ascii=False, separators=(',', ':')) + '\r\n').encode('utf-8')
 
 
+def query_result(module):
+    return (json.dumps({'Result': str(module)}, separators=(',', ':')) + '\r\n').encode('utf-8')
+
+
 ERR = b'{"Result":"ERR"}\r\n'
 D1 = 'D1-1,9.0,6.0,V,(2-5=12.6),NG\r\n'
 SHORT = 'Short,99.9,2.0,Mohm,(),OK\r\n'
@@ -119,12 +123,7 @@ def main():
         nonlocal passed
         b.reset()
         run()
-        # RD_NUM replies are commands; measurement/error replies remain JSON.
-        for line in b.output().splitlines(keepends=True):
-            if line.startswith(b'(START,'):
-                assert re.fullmatch(rb'\(START,[1-4]\)\r\n', line), line
-            else:
-                validate_json_stream(line)
+        validate_json_stream(b.output())
         passed += 1
         LOG.append(f'PASS {name}')
         LOG.append('  UART1_TX_HEX=' + b.output(1).hex(' '))
@@ -177,9 +176,27 @@ def main():
         b.finish(5000)
         b.feed(2, 'OK\r\n')
         b.finish(5000)
-        assert b.output() == b'(START,1)\r\n'
+        assert b.output() == query_result(1)
         assert b.output(1) == b''
     test('RD_NUM without terminator and ignored OK acknowledgement', rdnum_ack)
+
+    def missing_module_fragmented_query():
+        b.feed(2, '(RD_')
+        b.finish(5000)
+        assert b.output() == b'' and b.output(1) == b''
+        b.feed(2, 'NUM)\r\n')
+        b.finish(5000)
+        assert b.output() == ERR and b.output(1) == b''
+        assert b.lib.Host_State() == 0
+    test('no module: fragmented RD_NUM replies one complete ERR only after closing bracket', missing_module_fragmented_query)
+
+    def missing_module_repeated_queries():
+        b.feed(2, '(RD_NUM)(RD_NUM)(RD_NUM)')
+        b.finish(20000)
+        assert b.output() == ERR * 3 and b.output(1) == b''
+        b.finish(4_000_000)
+        assert b.output() == ERR * 3 and b.lib.Host_State() == 0
+    test('no module: each repeated RD_NUM gets one ERR without ACK or unsolicited repeats', missing_module_repeated_queries)
 
     def bare_ack():
         b.feed(2, 'OK')
@@ -418,7 +435,7 @@ def main():
             b.select_module(module)
             b.feed(2, '(RD_NUM)')
             b.finish(5000)
-            assert b.output() == f'(START,{module})\r\n'.encode()
+            assert b.output() == query_result(module)
             assert b.output(1) == b'' and b.lib.Host_State() == 0
         test(f'RD_NUM reads current X{module}, not a software default', module_query)
 
@@ -481,7 +498,7 @@ def main():
         b.select_module(4)
         b.feed(2, '(RD_NUM)OK')
         b.finish(5000)
-        assert b.output() == b'(START,4)\r\n'
+        assert b.output() == query_result(4)
         b.select_module(0)
         b.feed(2, '(RD_NUM)')
         b.finish(5000)
@@ -491,7 +508,7 @@ def main():
         b.finish(5000)
         b.feed(1, SHORT)
         b.finish()
-        assert b.output() == b'(START,4)\r\n' + ERR * 2 + frame('Short', 'OK', 'OK', 1)
+        assert b.output() == query_result(4) + ERR * 2 + frame('Short', 'OK', 'OK', 1)
         assert b.output(1) == b'test\r\n'
     test('RD_NUM reports live GPIO; successful/failed query leaves locked MH and session intact', query_during_session)
 
@@ -503,7 +520,7 @@ def main():
         b.select_module(3)
         b.feed(2, '(RD_NUM)')
         b.finish()
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + b'(START,3)\r\n'
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + query_result(3)
         b.feed(1, SHORT)
         b.finish()
         assert b.output().endswith(frame('Short', 'OK', 'OK'))
@@ -531,7 +548,7 @@ def main():
             if phase in ['query_reply', 'error_reply']:
                 b.select_module(1)
                 b.feed(2, '(RD_NUM)' if phase == 'query_reply' else '(BAD)')
-                expected = b'(START,1)\r\n' if phase == 'query_reply' else ERR
+                expected = query_result(1) if phase == 'query_reply' else ERR
                 assert b.output() and not b.output().endswith(b'\r\n')
                 b.lib.Host_SetInput(5, 1)
                 b.finish()
@@ -627,7 +644,7 @@ def main():
             b.feed(2, '(RD_NUM)')
             b.finish(5000)
             module = {1: 1, 2: 2, 4: 3, 8: 4}.get(mask)
-            assert b.output() == (f'(START,{module})\r\n'.encode() if module else ERR)
+            assert b.output() == (query_result(module) if module else ERR)
             assert b.output(1) == b''
     test('all 16 X1-X4 level combinations: only a unique low selects a module', every_module_combination)
 
