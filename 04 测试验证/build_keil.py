@@ -1,8 +1,4 @@
-"""Build the actual C51 sources, check memory, and retain the full build log.
-
-Default is an explicitly labelled TEST clock build. Production requires the
-ISP-measured frequency: --fosc 11059200 (example only, not a board measurement).
-"""
+"""构建实际 C51 源码并检查内存；默认内部 RC 为已确认的 22.1184 MHz。"""
 from pathlib import Path
 import argparse
 import re
@@ -16,16 +12,15 @@ PROJECT = ROOT / '02 软件源码' / '顺天祥协议转换'
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--keil', default='D:/Keil_v5')
-    parser.add_argument('--fosc', type=int, help='actual ISP-measured internal RC frequency in Hz')
+    parser.add_argument('--fosc', type=int, default=22118400, help='ISP internal RC frequency in Hz (default: 22118400)')
     args = parser.parse_args()
     tool = Path(args.keil) / 'C51' / 'BIN'
-    name = 'Bridge828C' if args.fosc else 'Bridge828C_TEST_CLOCK'
-    out = PROJECT / ('BuildMeasured' if args.fosc else 'BuildTest')
+    name = 'Bridge828C'
+    out = PROJECT / 'BuildMeasured'
     out.mkdir(exist_ok=True)
-    lines = [f'Clock mode: {"ISP measured (supplied by operator)" if args.fosc else "TEST ONLY"}',
-             f'FOSC_HZ={args.fosc or 11059200}', '']
-    define = f'PROJECT_FOSC_HZ={args.fosc}UL' if args.fosc else 'BRIDGE_BUILD_TEST'
-    sources = ['User/main.c', 'App/app_comm.c', 'System/System.c', 'System/Uart1.c', 'System/Uart2.c']
+    lines = ['Clock mode: internal RC (operator confirmed)', f'FOSC_HZ={args.fosc}', '']
+    define = f'PROJECT_FOSC_HZ={args.fosc}UL'
+    sources = ['User/main.c', 'App/app_comm.c', 'Control/input_control.c', 'System/System.c', 'System/Uart1.c', 'System/Uart2.c']
     objects = []
 
     def run(exe, params):
@@ -43,7 +38,7 @@ def main():
             obj = (out / (stem + '.obj')).relative_to(PROJECT).as_posix()
             listing = (out / (stem + '.lst')).relative_to(PROJECT).as_posix()
             run('C51.exe', [src, 'SMALL', 'OPTIMIZE(8,SPEED)', f'DEFINE({define})',
-                            'INCDIR(.\\Public;.\\System;.\\App)', f'OBJECT({obj})', f'PRINT({listing})'])
+                            'INCDIR(.\\Public;.\\System;.\\App;.\\Control)', f'OBJECT({obj})', f'PRINT({listing})'])
             objects.append(obj)
         startup = (out / 'STARTUP.obj').relative_to(PROJECT).as_posix()
         run('A51.EXE', ['User/STARTUP.A51', f'OBJECT({startup})',
