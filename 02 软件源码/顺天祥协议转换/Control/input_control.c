@@ -8,11 +8,11 @@
 
 #ifdef BRIDGE_HOST_TEST
 extern uint8 host_p3, host_p3m0, host_p3m1;
-#define INPUT_PORT host_p3
+#define INPUT_PORT  host_p3
 #define INPUT_MODE0 host_p3m0
 #define INPUT_MODE1 host_p3m1
 #else
-#define INPUT_PORT P3
+#define INPUT_PORT  P3
 #define INPUT_MODE0 P3M0
 #define INPUT_MODE1 P3M1
 #endif
@@ -28,9 +28,9 @@ extern uint8 host_p3, host_p3m0, host_p3m1;
  */
 void InputControl_Init(void)
 {
-    INPUT_MODE0 &= 0xC3u;                 // P3.2～P3.5 使用准双向模式
+    INPUT_MODE0 &= 0xC3u; // P3.2～P3.5 使用准双向模式
     INPUT_MODE1 &= 0xC3u;
-    INPUT_PORT |= INPUT_PIN_MASK;         // 写 1 释放输入并启用内部弱上拉
+    INPUT_PORT |= INPUT_PIN_MASK; // 写 1 释放输入并启用内部弱上拉
 }
 
 /**

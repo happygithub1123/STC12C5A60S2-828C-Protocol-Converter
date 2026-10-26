@@ -10,10 +10,12 @@ Language: Cpp
 AccessModifierOffset: -4
 NamespaceIndentation: All
 FixNamespaceComments: false
-BreakBeforeBraces: Linux
-AllowShortIfStatementsOnASingleLine: true
-AllowShortLoopsOnASingleLine: true
-AllowShortBlocksOnASingleLine: true
+BreakBeforeBraces: Allman
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+InsertBraces: true
 IndentCaseLabels: true
 SortIncludes: false
 AlignConsecutiveMacros: AcrossEmptyLines
