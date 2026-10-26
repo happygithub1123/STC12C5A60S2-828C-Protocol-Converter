@@ -1,5 +1,4 @@
 #include "app_comm.h"
-#include "System.h"
 #include "Uart1.h"
 #include "Uart2.h"
 #include "input_control.h"
@@ -28,7 +27,8 @@ uint8 app_last_error;
 static uint8 g_module_id, g_start_pos, g_command_len, g_command_discard;
 static uint8 g_error_pending, g_tx_kind, g_tx_phase, g_tx_index, g_tx_escape;
 static uint8 g_pending_byte, g_byte_pending, g_tx_finished;
-static uint16 g_line_scan, g_first_started, g_input_started;
+static uint16 g_line_scan;
+static uint8 g_x5_active;
 static const char CODE *g_reply;
 
 #define TX_NONE    0u
@@ -717,19 +717,46 @@ static void AppComm_SetError(uint8 reason)
 }
 
 /**
- * @brief  建立指定模号的低电平等待会话
+ * @brief  锁定已核对的模号并准备下发 test
  * @param  id 模号，范围为 1～4
  * @retval 无
  */
-static void AppComm_WaitForInput(uint8 id)
+static void AppComm_StartSession(uint8 id)
 {
     g_module_id = id;
     Uart1_ClearRx();
-    g_line_scan     = 0u;
-    g_start_pos     = 0u;
-    app_last_error  = APP_ERROR_NONE;
-    g_input_started = Sys_Millis();
-    app_state       = APP_WAIT_INPUT;
+    g_line_scan    = 0u;
+    g_start_pos    = 0u;
+    app_last_error = APP_ERROR_NONE;
+    app_state      = APP_SENDING_START;
+}
+
+/**
+ * @brief  回复当前输入快照对应的模号，不改变测试会话
+ * @param  id 唯一有效模号，0 表示输入无效
+ * @retval 无
+ */
+static void AppComm_ReplyModule(uint8 id)
+{
+    switch (id)
+    {
+        case 1u:
+            g_reply = "(START,1)\r\n";
+            break;
+        case 2u:
+            g_reply = "(START,2)\r\n";
+            break;
+        case 3u:
+            g_reply = "(START,3)\r\n";
+            break;
+        case 4u:
+            g_reply = "(START,4)\r\n";
+            break;
+        default:
+            g_reply = g_err_text; // 查询失败只回复 ERR，不终止已有会话
+            break;
+    }
+    AppComm_StartTx(TX_LITERAL);
 }
 
 /**
@@ -739,7 +766,7 @@ static void AppComm_WaitForInput(uint8 id)
  */
 static void AppComm_ExecuteCommand(void)
 {
-    uint8 begin, end, i;
+    uint8 begin, end, i, module;
     begin = 0u;
     end   = g_command_len;
     while (begin < end && AppComm_IsSpace(g_command[begin]))
@@ -766,23 +793,23 @@ static void AppComm_ExecuteCommand(void)
     }
     if (AppComm_StringEquals(g_command, "(RD_NUM)"))
     {
-#if FIXTURE_DEFAULT_ID == 1
-        g_reply = "{\"Result\":\"1\"}\r\n";
-#elif FIXTURE_DEFAULT_ID == 2
-        g_reply = "{\"Result\":\"2\"}\r\n";
-#elif FIXTURE_DEFAULT_ID == 3
-        g_reply = "{\"Result\":\"3\"}\r\n";
-#else
-        g_reply = "{\"Result\":\"4\"}\r\n";
-#endif
-        AppComm_StartTx(TX_LITERAL);
+        module = InputControl_GetModule(InputControl_ReadActive());
+        AppComm_ReplyModule(module);
     }
     else if (i == 9u && g_command[0] == '(' && g_command[1] == 'S' &&
              g_command[2] == 'T' && g_command[3] == 'A' && g_command[4] == 'R' &&
              g_command[5] == 'T' && g_command[6] == ',' && g_command[8] == ')' &&
              g_command[7] >= '1' && g_command[7] <= '4')
     {
-        AppComm_WaitForInput(g_command[7] - '0');
+        module = InputControl_GetModule(InputControl_ReadActive());
+        if (module && module == g_command[7] - '0')
+        {
+            AppComm_StartSession(module);
+        }
+        else
+        {
+            AppComm_SetError(APP_ERROR_MODULE);
+        }
     }
     else
     {
@@ -919,7 +946,7 @@ static void AppComm_PollBoard(void)
 }
 
 /**
- * @brief  非阻塞下发 test 指令，发送完成后启动首帧计时
+ * @brief  非阻塞下发 test 指令，完成后持续等待主板记录
  * @param  无
  * @retval 无
  */
@@ -934,27 +961,7 @@ static void AppComm_PollStartCommand(void)
     }
     else if (Uart1_TxIdle())
     {
-        g_first_started = Sys_Millis();
-        app_state       = APP_WAIT_FIRST;
-    }
-}
-
-/**
- * @brief  丢弃触发前数据并检查指定输入及一秒期限
- * @param  无
- * @retval 无
- */
-static void AppComm_PollTriggerInput(void)
-{
-    Uart1_ClearRx();
-    g_line_scan = 0u;
-    if ((uint16)(Sys_Millis() - g_input_started) >= INPUT_WAIT_MS)
-    {
-        AppComm_SetError(APP_ERROR_INPUT_TIMEOUT); // 边界时刻由超时优先
-    }
-    else if (InputControl_IsActive(g_module_id))
-    {
-        app_state = APP_SENDING_START; // 锁定当前模号，不再随输入变化
+        app_state = APP_WAIT_FIRST; // 等待首条记录，不设置超时
     }
 }
 
@@ -971,11 +978,12 @@ void AppComm_Init(void)
 {
     app_state      = APP_IDLE;
     app_last_error = APP_ERROR_NONE;
-    g_module_id    = FIXTURE_DEFAULT_ID;
+    g_module_id    = 0u; // 仅由有效 START 或 X5 触发锁定模号
     g_start_pos = g_command_len = g_command_discard = 0u;
     g_error_pending = g_tx_kind = g_tx_phase = g_tx_index = g_tx_escape = 0u;
     g_byte_pending = g_tx_finished = 0u;
-    g_line_scan = g_first_started = g_input_started = 0u;
+    g_line_scan                    = 0u;
+    g_x5_active                    = 0u; // 上电已为低的 X5 在首次轮询时也检测一次
     Uart1_ClearRx();
     Uart2_ClearRx();
 }
@@ -987,8 +995,11 @@ void AppComm_Init(void)
  */
 void AppComm_Poll(void)
 {
-    uint8 c;
-    if (Uart1_Overflow() && app_state != APP_IDLE && app_state != APP_WAIT_INPUT)
+    uint8 c, inputs, x5_trigger, module;
+    inputs      = InputControl_ReadActive();
+    x5_trigger  = (uint8)((inputs & 0x10u) && !g_x5_active);
+    g_x5_active = (uint8)(inputs & 0x10u); // 忙时同样更新锁存，不排队补发
+    if (Uart1_Overflow() && app_state != APP_IDLE)
     {
         AppComm_SetError(APP_ERROR_UART1_FULL);
     }
@@ -1030,18 +1041,19 @@ void AppComm_Poll(void)
     {
         Uart1_ClearRx();
         g_line_scan = 0u;
+        if (x5_trigger && !g_command_len && !g_command_discard)
+        {
+            module = InputControl_GetModule(inputs);
+            if (module)
+            {
+                AppComm_StartSession(module);
+            }
+            else
+            {
+                AppComm_SetError(APP_ERROR_MODULE);
+            }
+        }
         return;
     }
-    if (app_state == APP_WAIT_INPUT)
-    {
-        AppComm_PollTriggerInput();
-        return;
-    }
-    // 本轮先处理完整记录，再判断首帧超时。
     AppComm_PollBoard();
-    if (app_state == APP_WAIT_FIRST &&
-        (uint16)(Sys_Millis() - g_first_started) >= FIRST_RESPONSE_MS)
-    {
-        AppComm_SetError(APP_ERROR_FIRST_TIMEOUT);
-    }
 }

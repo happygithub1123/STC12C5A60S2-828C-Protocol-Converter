@@ -3,7 +3,8 @@
 
 #include "Public_cfg.h"
 
-void InputControl_Init(void);               /* 初始化 X1～X4 准双向输入。 */
-uint8 InputControl_IsActive(uint8 channel); /* 指定通道为低时返回 1，非法通道返回 0。 */
+void InputControl_Init(void);               /* 初始化 X1～X5 准双向输入。 */
+uint8 InputControl_ReadActive(void);        /* 一次读取端口，位 0～4 对应 X1～X5。 */
+uint8 InputControl_GetModule(uint8 inputs); /* 从快照识别唯一模号，无效返回 0。 */
 
 #endif

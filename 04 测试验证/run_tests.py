@@ -74,8 +74,12 @@ class Bridge:
         self.advance(us)
         assert not self.lib.Host_OutputOverflow()
 
+    def select_module(self, module):
+        for channel in range(1, 5):
+            self.lib.Host_SetInput(channel, int(channel == module))
+
     def start(self, module=1):
-        self.lib.Host_SetInput(module, 1)
+        self.select_module(module)
         self.feed(2, f'(START,{module})\r\n')
         self.finish(3000)
 
@@ -115,7 +119,12 @@ def main():
         nonlocal passed
         b.reset()
         run()
-        validate_json_stream(b.output())
+        # RD_NUM replies are commands; measurement/error replies remain JSON.
+        for line in b.output().splitlines(keepends=True):
+            if line.startswith(b'(START,'):
+                assert re.fullmatch(rb'\(START,[1-4]\)\r\n', line), line
+            else:
+                validate_json_stream(line)
         passed += 1
         LOG.append(f'PASS {name}')
         LOG.append('  UART1_TX_HEX=' + b.output(1).hex(' '))
@@ -163,11 +172,12 @@ def main():
         test(f'START,{module}; MH mapping; NG then OK independence', mapping)
 
     def rdnum_ack():
+        b.select_module(1)
         b.feed(2, '(RD_NUM)')
         b.finish(5000)
         b.feed(2, 'OK\r\n')
         b.finish(5000)
-        assert b.output() == b'{"Result":"1"}\r\n'
+        assert b.output() == b'(START,1)\r\n'
         assert b.output(1) == b''
     test('RD_NUM without terminator and ignored OK acknowledgement', rdnum_ack)
 
@@ -257,23 +267,17 @@ def main():
         assert b.output() == frame('D1-1', '2-5=12.6 V:NG', module=4)
     test('partial command and fragmented data never execute early', fragmented)
 
-    def timeout():
+    def indefinite_first_record():
         b.start()
         b.feed(1, 'test\r\n\r\n')
-        b.finish(2_900_000)
-        assert b.output() == b''
-        b.finish(150_000)
-        assert b.output() == ERR
         b.finish(4_000_000)
-        assert b.output() == ERR
+        assert b.output() == b''
+        b.finish(70_000_000)
+        assert b.output() == b'' and b.lib.Host_State() == 2
         b.feed(1, D1)
         b.finish()
-        assert b.output() == ERR
-        b.start(2)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == ERR + frame('Short', 'OK', 'OK', 2)
-    test('3-second first response timeout once / idle data ignored / recovery', timeout)
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG')
+    test('no first-record deadline: data after 74 seconds still uploads', indefinite_first_record)
 
     def no_interframe_timeout():
         b.start()
@@ -288,12 +292,15 @@ def main():
         b.lib.Host_SetMillis(65500)
         b.start()
         b.finish(3_100_000)
-        assert b.output() == ERR
-    test('16-bit millisecond rollover', rollover)
+        assert b.output() == b''
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == frame('Short', 'OK', 'OK')
+    test('old 16-bit millisecond wraparound does not end session', rollover)
 
     def restart():
         b.start()
-        b.lib.Host_SetInput(2, 1)
+        b.select_module(2)
         b.feed(1, D1)
         b.finish(500)
         b.feed(2, '(START,2)\r\n')
@@ -402,118 +409,227 @@ def main():
 
     def input_configuration():
         assert b.lib.Host_InputRegister(0) == 0xFF
-        assert b.lib.Host_InputRegister(1) == 0xC2
-        assert b.lib.Host_InputRegister(2) == 0xC1
-    test('GPIO init releases X1-X4 and preserves UART1 and upper port bits', input_configuration)
+        assert b.lib.Host_InputRegister(1) == 0x82
+        assert b.lib.Host_InputRegister(2) == 0x81
+    test('GPIO init releases X1-X5 and preserves P3.0, P3.1 and P3.7', input_configuration)
 
     for module in range(1, 5):
-        def selected_input(module=module):
-            for channel in range(1, 5):
-                if channel != module:
-                    b.lib.Host_SetInput(channel, 1)
-            b.feed(2, f'(START,{module})')
-            b.finish(100_000)
-            assert b.lib.Host_State() == 4
-            assert b.output(1) == b'' and b.output() == b''
-            b.lib.Host_SetInput(module, 1)
+        def module_query(module=module):
+            b.select_module(module)
+            b.feed(2, '(RD_NUM)')
+            b.finish(5000)
+            assert b.output() == f'(START,{module})\r\n'.encode()
+            assert b.output(1) == b'' and b.lib.Host_State() == 0
+        test(f'RD_NUM reads current X{module}, not a software default', module_query)
+
+        def wrong_module(module=module):
+            b.select_module(module)
+            target = module % 4 + 1
+            b.feed(2, f'(START,{target})')
+            b.finish(5000)
+            assert b.output() == ERR and b.output(1) == b''
+            assert b.lib.Host_State() == 0 and b.lib.Host_Error() == 6
+            b.select_module(target)
+            b.finish(4_000_000)
+            assert b.output() == ERR and b.output(1) == b''
+            b.feed(2, f'(START,{target})')
             b.finish(3000)
-            assert b.output(1) == bytes.fromhex('74 65 73 74 0d 0a')
             b.feed(1, SHORT)
             b.finish()
+            assert b.output() == ERR + frame('Short', 'OK', 'OK', target)
+        test(f'START mismatch with X{module}: immediate one ERR, no delayed start, recovery', wrong_module)
+
+        def x5_module(module=module):
+            b.select_module(module)
+            b.lib.Host_SetInput(5, 1)
+            b.finish(3000)
+            assert b.output(1) == bytes.fromhex('74 65 73 74 0d 0a')
+            b.feed(1, SHORT + 'end\r\n')
+            b.finish(4_000_000)
             assert b.output() == frame('Short', 'OK', 'OK', module)
-        test(f'X{module} maps to P3.{module+1}; other low inputs do not trigger', selected_input)
+            assert b.output(1) == b'test\r\n' and b.lib.Host_State() == 0
+        test(f'X5 initial low directly starts X{module} MH once; held low after end does not restart', x5_module)
 
-    def input_999():
-        b.feed(2, '(START,1)')
-        b.lib.Host_SetMillis(999)
-        b.lib.Host_SetInput(1, 1)
-        b.finish(3000)
-        assert b.output(1) == b'test\r\n'
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == frame('Short', 'OK', 'OK')
-    test('input at 999 ms is accepted', input_999)
+    for active in [(), (1, 2), (1, 2, 3, 4)]:
+        def invalid_inputs(active=active):
+            for channel in active:
+                b.lib.Host_SetInput(channel, 1)
+            b.feed(2, '(RD_NUM)')
+            b.finish(5000)
+            assert b.output() == ERR and b.lib.Host_State() == 0
+            b.feed(2, '(START,1)')
+            b.finish(5000)
+            assert b.output() == ERR * 2 and b.output(1) == b''
+            b.lib.Host_SetInput(5, 1)
+            b.finish(4_000_000)
+            assert b.output() == ERR * 3 and b.output(1) == b''
+            # Fixing the module while X5 stays low must not create a new trigger.
+            b.select_module(1)
+            b.finish(5000)
+            assert b.output() == ERR * 3 and b.output(1) == b''
+            b.lib.Host_SetInput(5, 0)
+            b.finish(100)
+            b.lib.Host_SetInput(5, 1)
+            b.finish(3000)
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output() == ERR * 3 + frame('Short', 'OK', 'OK')
+        test(f'RD_NUM, START and X5 reject non-unique module inputs {active}; X5 recovery', invalid_inputs)
 
-    def input_1000():
-        b.feed(2, '(START,1)')
-        b.lib.Host_SetMillis(1000)
-        b.lib.Host_SetInput(1, 1)
+    def query_during_session():
+        b.start(1)
+        b.select_module(4)
+        b.feed(2, '(RD_NUM)OK')
         b.finish(5000)
-        assert b.output() == ERR and b.output(1) == b''
-        assert b.lib.Host_Error() == 7
-        b.finish(4_000_000)
-        assert b.output() == ERR
-        b.start(2)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == ERR + frame('Short', 'OK', 'OK', 2)
-    test('1000 ms input deadline wins; one ERR; recovery', input_1000)
-
-    def high_timeout():
-        b.feed(2, '(START,4)')
-        b.finish(1_100_000)
-        assert b.output() == ERR and b.output(1) == b''
-    test('all high inputs time out without issuing a board command', high_timeout)
-
-    def replace_wait():
-        b.feed(2, '(START,1)')
-        b.finish(800_000)
-        b.feed(2, '(START,3)')
+        assert b.output() == b'(START,4)\r\n'
+        b.select_module(0)
+        b.feed(2, '(RD_NUM)')
+        b.finish(5000)
         b.lib.Host_SetInput(1, 1)
-        b.finish(400_000)
-        assert b.output(1) == b'' and b.output() == b''
-        b.lib.Host_SetInput(3, 1)
-        b.finish(3000)
+        b.lib.Host_SetInput(2, 1)
+        b.feed(2, '(RD_NUM)')
+        b.finish(5000)
         b.feed(1, SHORT)
         b.finish()
-        assert b.output() == frame('Short', 'OK', 'OK', 3)
-    test('new START replaces waiting input and resets its deadline', replace_wait)
+        assert b.output() == b'(START,4)\r\n' + ERR * 2 + frame('Short', 'OK', 'OK', 1)
+        assert b.output(1) == b'test\r\n'
+    test('RD_NUM reports live GPIO; successful/failed query leaves locked MH and session intact', query_during_session)
+
+    def query_during_json():
+        b.start(1)
+        b.feed(1, D1)
+        b.finish(200)
+        assert b.output() and not b.output().endswith(b'\r\n')
+        b.select_module(3)
+        b.feed(2, '(RD_NUM)')
+        b.finish()
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + b'(START,3)\r\n'
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output().endswith(frame('Short', 'OK', 'OK'))
+    test('RD_NUM waits for current JSON boundary and never interleaves bytes', query_during_json)
+
+    def x5_rearm():
+        b.select_module(2)
+        b.lib.Host_SetInput(5, 1)
+        b.finish(3000)
+        b.feed(1, SHORT + 'end\r\n')
+        b.finish()
+        b.lib.Host_SetInput(5, 0)
+        b.finish(100)
+        b.select_module(4)
+        b.lib.Host_SetInput(5, 1)
+        b.finish(3000)
+        b.feed(1, D1 + 'end\r\n')
+        b.finish()
+        assert b.output(1) == b'test\r\n' * 2
+        assert b.output() == frame('Short', 'OK', 'OK', 2) + frame('D1-1', '2-5=12.6 V:NG', module=4)
+    test('X5 high rearms; next low snapshots a new module', x5_rearm)
+
+    for phase in ['sending_test', 'waiting_first', 'sending_json', 'receiving', 'query_reply', 'error_reply']:
+        def busy_x5(phase=phase):
+            if phase in ['query_reply', 'error_reply']:
+                b.select_module(1)
+                b.feed(2, '(RD_NUM)' if phase == 'query_reply' else '(BAD)')
+                expected = b'(START,1)\r\n' if phase == 'query_reply' else ERR
+                assert b.output() and not b.output().endswith(b'\r\n')
+                b.lib.Host_SetInput(5, 1)
+                b.finish()
+                assert b.output() == expected and b.output(1) == b''
+                b.finish(5000)
+                assert b.output(1) == b''
+            else:
+                b.select_module(1)
+                if phase == 'sending_test':
+                    b.feed(2, '(START,1)')
+                    assert b.lib.Host_State() == 1
+                else:
+                    b.start(1)
+                expected = b''
+                if phase in ['sending_json', 'receiving']:
+                    b.feed(1, D1)
+                    b.finish(200 if phase == 'sending_json' else 10000)
+                    expected = frame('D1-1', '2-5=12.6 V:NG')
+                b.lib.Host_SetInput(5, 1)
+                b.finish(5000)
+                b.feed(1, SHORT + 'end\r\n')
+                b.finish()
+                assert b.output() == expected + frame('Short', 'OK', 'OK')
+                assert b.output(1) == b'test\r\n'
+            # A low seen while busy is consumed, never queued into the next idle.
+            b.lib.Host_SetInput(5, 0)
+            b.finish(100)
+            b.lib.Host_SetInput(5, 1)
+            b.finish(3000)
+            assert b.output(1) == (b'test\r\n' if phase in ['query_reply', 'error_reply'] else b'test\r\n' * 2)
+        test('X5 during ' + phase + ': consumed without restart/queued trigger', busy_x5)
 
     def latch_once():
         b.start(1)
-        b.lib.Host_SetInput(1, 0)
-        b.lib.Host_SetInput(4, 1)
+        b.select_module(4)
         b.feed(1, SHORT + SHORT)
         b.finish()
-        b.lib.Host_SetInput(1, 1)
+        b.select_module(1)
         b.finish()
         assert b.output(1) == b'test\r\n'
         assert b.output() == frame('Short', 'OK', 'OK') * 2
-    test('trigger latches MH and never retriggers on level changes', latch_once)
+    test('changing module inputs after start never changes locked MH or retriggers', latch_once)
 
-    def discard_waiting_data():
-        b.feed(2, '(START,2)')
+    def discard_idle_data():
         b.feed(1, 'X' * 900, spacing=0)
         b.finish(10000)
-        b.feed(2, '(RD_NUM)OK\r\n')
-        b.finish(5000)
-        assert b.output() == b'{"Result":"1"}\r\n'
-        assert b.output(1) == b''
         b.feed(1, D1[:15])
-        b.lib.Host_SetInput(2, 1)
-        b.finish(3000)
+        b.start(2)
         b.feed(1, SHORT)
         b.finish()
-        assert b.output() == b'{"Result":"1"}\r\n' + frame('Short', 'OK', 'OK', 2)
-    test('waiting discards stale/overflowed board bytes while commands remain responsive', discard_waiting_data)
+        assert b.output() == frame('Short', 'OK', 'OK', 2)
+    test('START clears stale idle/overflowed board bytes and partial lines', discard_idle_data)
 
-    def first_timeout_origin():
-        b.feed(2, '(START,1)')
-        b.finish(900_000)
-        b.lib.Host_SetInput(1, 1)
+    def x5_clears_stale():
+        b.feed(1, SHORT + D1[:15], spacing=0)
+        b.select_module(3)
+        b.lib.Host_SetInput(5, 1)
         b.finish(3000)
-        b.finish(2_900_000)
-        assert b.output() == b''
-        b.finish(150_000)
-        assert b.output() == ERR and b.lib.Host_Error() == 6
-    test('3-second first-record timeout starts after test command TX completes', first_timeout_origin)
+        b.feed(1, D1)
+        b.finish()
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG', module=3)
+    test('X5 clears pre-trigger board records and fragments', x5_clears_stale)
 
-    def input_rollover():
-        b.lib.Host_SetMillis(65500)
-        b.feed(2, '(START,1)')
-        b.finish(1_100_000)
-        assert b.output() == ERR and b.lib.Host_Error() == 7
-    test('input timeout across 16-bit millisecond wraparound', input_rollover)
+    def invalid_restart():
+        b.start(1)
+        b.feed(1, D1)
+        b.finish(200)
+        b.select_module(2)
+        b.feed(2, '(START,3)')
+        b.finish()
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR
+        assert b.output(1) == b'test\r\n' and b.lib.Host_State() == 0
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR
+    test('mismatched new START completes JSON then reports ERR and ends old session', invalid_restart)
+
+    def debug_batch():
+        b.start(1)
+        b.feed(1, (HERE / '串口测试数据/主板连续输入.txt').read_bytes())
+        b.finish()
+        # Git checkout may normalize fixture line endings; wire output must be CRLF.
+        lines = (HERE / '串口测试数据/上位机预期输出_模号1.jsonl').read_text(encoding='utf-8').splitlines()
+        assert b.output() == ''.join(line + '\r\n' for line in lines).encode('utf-8')
+        assert b.output(1) == b'test\r\n'
+    test('six-record serial debug file matches documented bytes', debug_batch)
+
+    def every_module_combination():
+        for mask in range(16):
+            b.reset()
+            for channel in range(1, 5):
+                b.lib.Host_SetInput(channel, mask & (1 << (channel - 1)))
+            b.feed(2, '(RD_NUM)')
+            b.finish(5000)
+            module = {1: 1, 2: 2, 4: 3, 8: 4}.get(mask)
+            assert b.output() == (f'(START,{module})\r\n'.encode() if module else ERR)
+            assert b.output(1) == b''
+    test('all 16 X1-X4 level combinations: only a unique low selects a module', every_module_combination)
 
     LOG.append(f'ALL PASS: {passed} cases. Same C firmware core and RX-ring implementation; simulated UART/time only.')
     LOG.append('NOT VALIDATED: real MCU timing, internal RC drift, physical serial wiring, actual 828C application acceptance.')

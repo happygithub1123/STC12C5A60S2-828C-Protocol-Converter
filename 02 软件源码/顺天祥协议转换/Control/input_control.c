@@ -4,7 +4,7 @@
  内部定义
  *============================================================================*/
 
-#define INPUT_PIN_MASK 0x3Cu
+#define INPUT_PIN_MASK 0x7Cu
 
 #ifdef BRIDGE_HOST_TEST
 extern uint8 host_p3, host_p3m0, host_p3m1;
@@ -22,30 +22,48 @@ extern uint8 host_p3, host_p3m0, host_p3m1;
  *============================================================================*/
 
 /**
- * @brief  初始化 X1～X4 输入，保留同端口其他引脚配置
+ * @brief  初始化 X1～X5 输入，保留同端口其他引脚配置
  * @param  无
  * @retval 无
  */
 void InputControl_Init(void)
 {
-    INPUT_MODE0 &= 0xC3u; // P3.2～P3.5 使用准双向模式
-    INPUT_MODE1 &= 0xC3u;
+    INPUT_MODE0 &= 0x83u; // P3.2～P3.6 使用准双向模式
+    INPUT_MODE1 &= 0x83u;
     INPUT_PORT |= INPUT_PIN_MASK; // 写 1 释放输入并启用内部弱上拉
 }
 
 /**
- * @brief  读取指定启动输入是否有效
- * @param  channel 通道编号，范围为 1～4
- * @retval 1：低电平有效；0：高电平或通道非法
+ * @brief  一次读取五路低电平输入，供模号识别和 X5 触发共用
+ * @param  无
+ * @retval 位 0～4 分别对应 X1～X5，置 1 表示低电平有效
  */
-uint8 InputControl_IsActive(uint8 channel)
+uint8 InputControl_ReadActive(void)
 {
-    uint8 mask;
+    uint8 port;
 
-    if (channel < 1u || channel > 4u)
+    port = INPUT_PORT; // 只读取一次端口，避免逐路读取造成模号混合
+    return (uint8)(((uint8)~port & INPUT_PIN_MASK) >> 2);
+}
+
+/**
+ * @brief  从同一次输入快照识别唯一有效模号
+ * @param  inputs InputControl_ReadActive 返回的输入位图
+ * @retval 1～4：唯一有效模号；0：无模号或多路同时有效
+ */
+uint8 InputControl_GetModule(uint8 inputs)
+{
+    switch (inputs & 0x0Fu)
     {
-        return 0u;
+        case 0x01u:
+            return 1u;
+        case 0x02u:
+            return 2u;
+        case 0x04u:
+            return 3u;
+        case 0x08u:
+            return 4u;
+        default:
+            return 0u;
     }
-    mask = (uint8)(1u << (channel + 1u));
-    return (uint8)((INPUT_PORT & mask) == 0u);
 }

@@ -67,15 +67,6 @@ void Host_Write(uint8 port, uint8 value)
 }
 
 /**
- * @brief  提供模拟的 16 位毫秒时钟
- * @param  无
- * @retval 允许回绕的毫秒计数
- */
-uint16 Sys_Millis(void)
-{
-    return (uint16)(now_us / 1000u);
-}
-/**
  * @brief  初始化同一份串口驱动的接收缓冲
  * @param  无
  * @retval 无
@@ -115,14 +106,14 @@ EXPORT void Host_SetPoll(unsigned int interval)
 }
 /**
  * @brief  设置模拟输入电平
- * @param  channel 通道 1～4
+ * @param  channel 通道 1～5
  * @param  active 非零表示低电平有效
  * @retval 无
  */
 EXPORT void Host_SetInput(unsigned int channel, unsigned int active)
 {
     uint8 mask;
-    if (channel < 1u || channel > 4u)
+    if (channel < 1u || channel > 5u)
     {
         return;
     }
@@ -171,7 +162,7 @@ EXPORT void Host_Advance(unsigned int duration)
     }
 }
 /**
- * @brief  设置模拟时钟以验证期限和回绕
+ * @brief  设置模拟时间，验证长时间等待不受旧计时回绕影响
  * @param  milliseconds 毫秒计数
  * @retval 无
  */
