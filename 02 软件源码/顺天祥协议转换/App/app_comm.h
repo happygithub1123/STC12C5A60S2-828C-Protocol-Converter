@@ -6,6 +6,7 @@
 #define APP_SENDING_START  1u
 #define APP_WAIT_FIRST     2u
 #define APP_RECEIVING      3u
+#define APP_WAIT_INPUT     4u
 
 #define APP_ERROR_NONE        0u
 #define APP_ERROR_COMMAND     1u
@@ -14,6 +15,7 @@
 #define APP_ERROR_UART1_FULL  4u
 #define APP_ERROR_UART2_FULL  5u
 #define APP_ERROR_FIRST_TIMEOUT 6u
+#define APP_ERROR_INPUT_TIMEOUT 7u
 
 void AppComm_Init(void);
 void AppComm_Poll(void);

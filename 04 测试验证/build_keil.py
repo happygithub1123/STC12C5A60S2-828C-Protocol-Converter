@@ -25,7 +25,7 @@ def main():
     lines = [f'Clock mode: {"ISP measured (supplied by operator)" if args.fosc else "TEST ONLY"}',
              f'FOSC_HZ={args.fosc or 11059200}', '']
     define = f'PROJECT_FOSC_HZ={args.fosc}UL' if args.fosc else 'BRIDGE_BUILD_TEST'
-    sources = ['User/main.c', 'App/app_comm.c', 'System/System.c', 'System/Uart1.c', 'System/Uart2.c']
+    sources = ['User/main.c', 'App/app_comm.c', 'Control/input_control.c', 'System/System.c', 'System/Uart1.c', 'System/Uart2.c']
     objects = []
 
     def run(exe, params):
@@ -43,7 +43,7 @@ def main():
             obj = (out / (stem + '.obj')).relative_to(PROJECT).as_posix()
             listing = (out / (stem + '.lst')).relative_to(PROJECT).as_posix()
             run('C51.exe', [src, 'SMALL', 'OPTIMIZE(8,SPEED)', f'DEFINE({define})',
-                            'INCDIR(.\\Public;.\\System;.\\App)', f'OBJECT({obj})', f'PRINT({listing})'])
+                            'INCDIR(.\\Public;.\\System;.\\App;.\\Control)', f'OBJECT({obj})', f'PRINT({listing})'])
             objects.append(obj)
         startup = (out / 'STARTUP.obj').relative_to(PROJECT).as_posix()
         run('A51.EXE', ['User/STARTUP.A51', f'OBJECT({startup})',

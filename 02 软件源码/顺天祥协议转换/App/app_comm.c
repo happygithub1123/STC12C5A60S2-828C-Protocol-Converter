@@ -3,6 +3,7 @@
 #include "System.h"
 #include "Uart1.h"
 #include "Uart2.h"
+#include "input_control.h"
 
 /* No complete-line or JSON array: validated UART1 bytes remain in its ring
  * until the streaming encoder consumes them. Only short metadata is copied. */
@@ -23,7 +24,7 @@ uint8 app_last_error;
 static uint8 module_id, start_pos, command_len, command_discard;
 static uint8 error_pending, tx_kind, tx_phase, tx_index, tx_escape;
 static uint8 pending_byte, byte_pending, tx_finished;
-static uint16 line_scan, first_started;
+static uint16 line_scan, first_started, input_started;
 static const char CODE *reply;
 
 #define TX_NONE    0u
@@ -340,7 +341,8 @@ static void BeginTest(uint8 id)
     line_scan = 0u;
     start_pos = 0u;
     app_last_error = APP_ERROR_NONE;
-    app_state = APP_SENDING_START;
+    input_started = Sys_Millis();
+    app_state = APP_WAIT_INPUT;
 }
 
 static void ExecuteCommand(void)
@@ -444,7 +446,7 @@ void AppComm_Init(void)
     start_pos = command_len = command_discard = 0u;
     error_pending = tx_kind = tx_phase = tx_index = tx_escape = 0u;
     byte_pending = tx_finished = 0u;
-    line_scan = first_started = 0u;
+    line_scan = first_started = input_started = 0u;
     Uart1_ClearRx();
     Uart2_ClearRx();
 }
@@ -452,7 +454,7 @@ void AppComm_Init(void)
 void AppComm_Poll(void)
 {
     uint8 c;
-    if (Uart1_Overflow() && app_state != APP_IDLE) Fail(APP_ERROR_UART1_FULL);
+    if (Uart1_Overflow() && app_state != APP_IDLE && app_state != APP_WAIT_INPUT) Fail(APP_ERROR_UART1_FULL);
     if (Uart2_Overflow()) {
         Uart2_ClearRx();
         command_len = 0u;
@@ -469,11 +471,8 @@ void AppComm_Poll(void)
         return;
     }
     if (app_state == APP_SENDING_START) {
-        if (start_pos < 4u) c = (uint8)"test"[start_pos];
-        else if (start_pos == 4u) c = '0' + module_id;
-        else if (start_pos == 5u) c = '\r';
-        else c = '\n';
-        if (start_pos < 7u) {
+        c = (uint8)"test\r\n"[start_pos];
+        if (start_pos < 6u) {
             if (Uart1_TryWrite(c)) ++start_pos;
         } else if (Uart1_TxIdle()) {
             first_started = Sys_Millis();
@@ -486,6 +485,13 @@ void AppComm_Poll(void)
         if (tx_kind || error_pending || app_state == APP_SENDING_START) return;
     }
     if (app_state == APP_IDLE) { Uart1_ClearRx(); line_scan = 0u; return; }
+    if (app_state == APP_WAIT_INPUT) {
+        Uart1_ClearRx();
+        line_scan = 0u;
+        if ((uint16)(Sys_Millis() - input_started) >= INPUT_WAIT_MS) Fail(APP_ERROR_INPUT_TIMEOUT);
+        else if (InputControl_IsActive(module_id)) app_state = APP_SENDING_START;
+        return;
+    }
     /* Process complete data before testing the deadline in this poll. */
     PollInput();
     if (app_state == APP_WAIT_FIRST &&

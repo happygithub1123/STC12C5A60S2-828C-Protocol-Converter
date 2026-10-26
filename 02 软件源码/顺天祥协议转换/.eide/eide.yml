@@ -1,4 +1,4 @@
-version: "4.1"
+version: '4.1'
 name: Project
 type: C51
 deviceName: null
@@ -8,32 +8,37 @@ virtualFolder:
   name: <virtual_root>
   files: []
   folders:
-    - name: User
-      files:
-        - path: User/main.c
-        - path: User/STARTUP.A51
-      folders: []
-    - name: App
-      files:
-        - path: App/app_comm.c
-        - path: App/app_comm.h
-      folders: []
-    - name: System
-      files:
-        - path: System/System.c
-        - path: System/System.h
-        - path: System/Uart1.c
-        - path: System/Uart1.h
-        - path: System/Uart2.c
-        - path: System/Uart2.h
-      folders: []
-    - name: Public
-      files:
-        - path: Public/STC12C5A60S2.h
-        - path: Public/project_types.h
-        - path: Public/board_config.h
-        - path: Public/Public_cfg.h
-      folders: []
+  - name: User
+    files:
+    - path: User/main.c
+    - path: User/STARTUP.A51
+    folders: []
+  - name: App
+    files:
+    - path: App/app_comm.c
+    - path: App/app_comm.h
+    folders: []
+  - name: System
+    files:
+    - path: System/System.c
+    - path: System/System.h
+    - path: System/Uart1.c
+    - path: System/Uart1.h
+    - path: System/Uart2.c
+    - path: System/Uart2.h
+    folders: []
+  - name: Public
+    files:
+    - path: Public/STC12C5A60S2.h
+    - path: Public/project_types.h
+    - path: Public/board_config.h
+    - path: Public/Public_cfg.h
+    folders: []
+  - name: Control
+    files:
+    - path: Control/input_control.c
+    - path: Control/input_control.h
+    folders: []
 dependenceList: []
 outDir: build
 miscInfo:
@@ -43,11 +48,12 @@ targets:
     cppPreprocessAttrs:
       defineList: []
       incList:
-        - D:\Keil_v5\C51\INC\Public
-        - User
-        - App
-        - System
-        - Public
+      - D:\Keil_v5\C51\INC\Public
+      - User
+      - App
+      - System
+      - Public
+      - Control
       libList: []
     excludeList: []
     settings:
@@ -67,25 +73,26 @@ targets:
             ram-mode: SMALL
             rom-mode: LARGE
           linker:
-            misc-controls: ""
+            misc-controls: ''
             output-format: elf
             remove-unused: true
     uploadConfigMap:
       Custom:
-        bin: ""
-        commandLine: ""
-        eraseChipCommand: ""
+        bin: ''
+        commandLine: ''
+        eraseChipCommand: ''
     uploader: Custom
   828C TEST CLOCK:
     cppPreprocessAttrs:
       defineList:
-        - BRIDGE_BUILD_TEST
+      - BRIDGE_BUILD_TEST
       incList:
-        - D:/Keil_v5/C51/INC/Public
-        - User
-        - App
-        - System
-        - Public
+      - D:/Keil_v5/C51/INC/Public
+      - User
+      - App
+      - System
+      - Public
+      - Control
       libList: []
     excludeList: []
     settings:
@@ -105,26 +112,27 @@ targets:
             ram-mode: SMALL
             rom-mode: LARGE
           linker:
-            misc-controls: ""
+            misc-controls: ''
             output-format: elf
             remove-unused: true
     uploadConfigMap:
       Custom:
-        bin: ""
-        commandLine: ""
-        eraseChipCommand: ""
+        bin: ''
+        commandLine: ''
+        eraseChipCommand: ''
     uploader: Custom
   Target 1:
     cppPreprocessAttrs:
       defineList: []
       incList:
-        - D:/Keil_v5/C51/INC/STC
-        - User
-        - App
-        - Control
-        - Hardware
-        - System
-        - Public
+      - D:/Keil_v5/C51/INC/STC
+      - User
+      - App
+      - Control
+      - Hardware
+      - System
+      - Public
+      - Control
       libList: []
     excludeList: []
     settings:
@@ -144,12 +152,12 @@ targets:
             ram-mode: LARGE
             rom-mode: LARGE
           linker:
-            misc-controls: ""
+            misc-controls: ''
             output-format: elf
             remove-unused: true
     uploadConfigMap:
       Custom:
-        bin: ""
-        commandLine: ""
-        eraseChipCommand: ""
+        bin: ''
+        commandLine: ''
+        eraseChipCommand: ''
     uploader: Custom

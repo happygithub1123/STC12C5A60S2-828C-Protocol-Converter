@@ -29,11 +29,11 @@ def build():
             k, v = line.split('=', 1)
             env[k.upper()] = v
     sources = [PROJECT / 'App/app_comm.c', PROJECT / 'System/Uart1.c',
-               PROJECT / 'System/Uart2.c', HERE / 'host_platform.c']
+               PROJECT / 'System/Uart2.c', PROJECT / 'Control/input_control.c', HERE / 'host_platform.c']
     compiler = Path(env['VCTOOLSINSTALLDIR']) / 'bin/Hostx64/x64/cl.exe'
-    cmd = [str(compiler), '/nologo', '/LD', '/TC', '/std:c11', '/W4', '/WX', '/Od',
+    cmd = [str(compiler), '/nologo', '/LD', '/TC', '/std:c11', '/utf-8', '/W4', '/WX', '/Od',
            '/DBRIDGE_HOST_TEST', '/D_CRT_SECURE_NO_WARNINGS',
-           *['/I' + str(PROJECT / d) for d in ['Public', 'System', 'App']],
+           *['/I' + str(PROJECT / d) for d in ['Public', 'System', 'App', 'Control']],
            *map(str, sources), '/link', '/OUT:' + str(OUT / 'bridge_host.dll')]
     result = subprocess.run(cmd, cwd=OUT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     msg = result.stdout.decode('gb18030', errors='replace')
@@ -47,10 +47,11 @@ class Bridge:
         self.lib = ctypes.CDLL(str(OUT / 'bridge_host.dll'))
         for name, argc in [('Reset', 0), ('SetPoll', 1), ('Advance', 1), ('SetMillis', 1),
                            ('Receive', 2), ('Length', 1), ('Byte', 2), ('State', 0),
-                           ('Error', 0), ('PeakRx', 0), ('OutputOverflow', 0)]:
+                           ('Error', 0), ('PeakRx', 0), ('OutputOverflow', 0),
+                           ('SetInput', 2), ('InputRegister', 1)]:
             fn = getattr(self.lib, 'Host_' + name)
             fn.argtypes = [ctypes.c_uint] * argc
-            fn.restype = ctypes.c_uint if name in ['Length', 'Byte', 'State', 'Error', 'PeakRx', 'OutputOverflow'] else None
+            fn.restype = ctypes.c_uint if name in ['Length', 'Byte', 'State', 'Error', 'PeakRx', 'OutputOverflow', 'InputRegister'] else None
         self.reset()
 
     def reset(self):
@@ -74,6 +75,7 @@ class Bridge:
         assert not self.lib.Host_OutputOverflow()
 
     def start(self, module=1):
+        self.lib.Host_SetInput(module, 1)
         self.feed(2, f'(START,{module})\r\n')
         self.finish(3000)
 
@@ -139,7 +141,7 @@ def main():
             records.append({'input': line, 'expected': json.loads(frame(name, value, status.upper()))})
         b.feed(1, '\r\n'.join(lines) + '\r\n', spacing)
         b.finish(1_000_000)
-        assert b.output(1) == b'test1\r\n'
+        assert b.output(1) == b'test\r\n'
         assert b.output() == expected, (b.output(), expected)
         assert len(records) == 28
         assert len(validate_json_stream(b.output())[0]['Open'].split(';')) == 36
@@ -155,7 +157,7 @@ def main():
             b.start(module)
             b.feed(1, D1 + SHORT)
             b.finish()
-            assert b.output(1) == f'test{module}\r\n'.encode()
+            assert b.output(1) == b'test\r\n'
             assert b.output() == frame('D1-1', '12.6V:NG', module=module) + frame('Short', 'OK', 'OK', module)
         test(f'START,{module}; MH mapping; NG then OK independence', mapping)
 
@@ -212,6 +214,7 @@ def main():
     test('UTF-8 unit preserved', utf8_unit)
 
     def fragmented():
+        b.lib.Host_SetInput(4, 1)
         b.feed(2, '(STA')
         b.finish(5000)
         assert b.output(1) == b''
@@ -260,12 +263,13 @@ def main():
 
     def restart():
         b.start()
+        b.lib.Host_SetInput(2, 1)
         b.feed(1, D1)
         b.finish(500)
         b.feed(2, '(START,2)\r\n')
         b.finish(15000)
         assert b.output() == frame('D1-1', '12.6V:NG')
-        assert b.output(1) == b'test1\r\ntest2\r\n'
+        assert b.output(1) == b'test\r\ntest\r\n'
         b.feed(1, SHORT)
         b.finish()
         assert b.output() == frame('D1-1', '12.6V:NG') + frame('Short', 'OK', 'OK', 2)
@@ -365,6 +369,121 @@ def main():
             b.finish(15000)
         assert b.output() == expected
     test('150 generated records: arbitrary names, units, values, statuses, ring wraparound', generated)
+
+    def input_configuration():
+        assert b.lib.Host_InputRegister(0) == 0xFF
+        assert b.lib.Host_InputRegister(1) == 0xC2
+        assert b.lib.Host_InputRegister(2) == 0xC1
+    test('GPIO init releases X1-X4 and preserves UART1 and upper port bits', input_configuration)
+
+    for module in range(1, 5):
+        def selected_input(module=module):
+            for channel in range(1, 5):
+                if channel != module:
+                    b.lib.Host_SetInput(channel, 1)
+            b.feed(2, f'(START,{module})')
+            b.finish(100_000)
+            assert b.lib.Host_State() == 4
+            assert b.output(1) == b'' and b.output() == b''
+            b.lib.Host_SetInput(module, 1)
+            b.finish(3000)
+            assert b.output(1) == bytes.fromhex('74 65 73 74 0d 0a')
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output() == frame('Short', 'OK', 'OK', module)
+        test(f'X{module} maps to P3.{module+1}; other low inputs do not trigger', selected_input)
+
+    def input_999():
+        b.feed(2, '(START,1)')
+        b.lib.Host_SetMillis(999)
+        b.lib.Host_SetInput(1, 1)
+        b.finish(3000)
+        assert b.output(1) == b'test\r\n'
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == frame('Short', 'OK', 'OK')
+    test('input at 999 ms is accepted', input_999)
+
+    def input_1000():
+        b.feed(2, '(START,1)')
+        b.lib.Host_SetMillis(1000)
+        b.lib.Host_SetInput(1, 1)
+        b.finish(5000)
+        assert b.output() == ERR and b.output(1) == b''
+        assert b.lib.Host_Error() == 7
+        b.finish(4_000_000)
+        assert b.output() == ERR
+        b.start(2)
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == ERR + frame('Short', 'OK', 'OK', 2)
+    test('1000 ms input deadline wins; one ERR; recovery', input_1000)
+
+    def high_timeout():
+        b.feed(2, '(START,4)')
+        b.finish(1_100_000)
+        assert b.output() == ERR and b.output(1) == b''
+    test('all high inputs time out without issuing a board command', high_timeout)
+
+    def replace_wait():
+        b.feed(2, '(START,1)')
+        b.finish(800_000)
+        b.feed(2, '(START,3)')
+        b.lib.Host_SetInput(1, 1)
+        b.finish(400_000)
+        assert b.output(1) == b'' and b.output() == b''
+        b.lib.Host_SetInput(3, 1)
+        b.finish(3000)
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == frame('Short', 'OK', 'OK', 3)
+    test('new START replaces waiting input and resets its deadline', replace_wait)
+
+    def latch_once():
+        b.start(1)
+        b.lib.Host_SetInput(1, 0)
+        b.lib.Host_SetInput(4, 1)
+        b.feed(1, SHORT + SHORT)
+        b.finish()
+        b.lib.Host_SetInput(1, 1)
+        b.finish()
+        assert b.output(1) == b'test\r\n'
+        assert b.output() == frame('Short', 'OK', 'OK') * 2
+    test('trigger latches MH and never retriggers on level changes', latch_once)
+
+    def discard_waiting_data():
+        b.feed(2, '(START,2)')
+        b.feed(1, 'X' * 900, spacing=0)
+        b.finish(10000)
+        b.feed(2, '(RD_NUM)OK\r\n')
+        b.finish(5000)
+        assert b.output() == b'{"Result":"1"}\r\n'
+        assert b.output(1) == b''
+        b.feed(1, D1[:15])
+        b.lib.Host_SetInput(2, 1)
+        b.finish(3000)
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == b'{"Result":"1"}\r\n' + frame('Short', 'OK', 'OK', 2)
+    test('waiting discards stale/overflowed board bytes while commands remain responsive', discard_waiting_data)
+
+    def first_timeout_origin():
+        b.feed(2, '(START,1)')
+        b.finish(900_000)
+        b.lib.Host_SetInput(1, 1)
+        b.finish(3000)
+        b.finish(2_900_000)
+        assert b.output() == b''
+        b.finish(150_000)
+        assert b.output() == ERR and b.lib.Host_Error() == 6
+    test('3-second first-record timeout starts after test command TX completes', first_timeout_origin)
+
+    def input_rollover():
+        b.lib.Host_SetMillis(65500)
+        b.feed(2, '(START,1)')
+        b.finish(1_100_000)
+        assert b.output() == ERR and b.lib.Host_Error() == 7
+    test('input timeout across 16-bit millisecond wraparound', input_rollover)
 
     LOG.append(f'ALL PASS: {passed} cases. Same C firmware core and RX-ring implementation; simulated UART/time only.')
     LOG.append('NOT VALIDATED: real MCU timing, internal RC drift, physical serial wiring, actual 828C application acceptance.')

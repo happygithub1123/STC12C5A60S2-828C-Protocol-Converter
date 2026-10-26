@@ -4,6 +4,7 @@
 #include "Uart1.h"
 #include "Uart2.h"
 #include "app_comm.h"
+#include "input_control.h"
 
 #define EXPORT __declspec(dllexport)
 #define OUTPUT_MAX 262144u
@@ -11,6 +12,7 @@ static uint8 output1[OUTPUT_MAX], output2[OUTPUT_MAX];
 static unsigned int length1, length2;
 static unsigned long long now_us, ready1, ready2;
 static unsigned int poll_us, max_rx, output_overflow;
+uint8 host_p3, host_p3m0, host_p3m1;
 
 uint8 Host_TxReady(uint8 port)
 {
@@ -38,11 +40,28 @@ EXPORT void Host_Reset(void)
     now_us = ready1 = ready2 = 0u;
     length1 = length2 = max_rx = output_overflow = 0u;
     poll_us = 10u;
+    host_p3 = 0xC3u;
+    host_p3m0 = 0xC2u;
+    host_p3m1 = 0xC1u;
     Sys_Init();
+    InputControl_Init();
     AppComm_Init();
 }
 
 EXPORT void Host_SetPoll(unsigned int interval) { poll_us = interval ? interval : 1u; }
+EXPORT void Host_SetInput(unsigned int channel, unsigned int active)
+{
+    uint8 mask;
+    if (channel < 1u || channel > 4u) return;
+    mask = (uint8)(1u << (channel + 1u));
+    if (active) host_p3 &= (uint8)~mask;
+    else host_p3 |= mask;
+}
+EXPORT unsigned int Host_InputRegister(unsigned int which)
+{
+    if (which == 0u) return host_p3;
+    return which == 1u ? host_p3m0 : host_p3m1;
+}
 EXPORT void Host_Advance(unsigned int duration)
 {
     unsigned long long end_time;

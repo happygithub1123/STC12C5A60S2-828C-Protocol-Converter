@@ -22,6 +22,7 @@
 #define PROJECT_UNIT_MAX          8u
 #define COMMAND_MAX              23u
 #define FIRST_RESPONSE_MS         3000u
+#define INPUT_WAIT_MS             1000u
 
 #if FIXTURE_DEFAULT_ID < 1 || FIXTURE_DEFAULT_ID > 4
 #error FIXTURE_DEFAULT_ID_must_be_1_to_4
