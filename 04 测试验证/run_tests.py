@@ -552,9 +552,12 @@ def main():
                 assert b.output() and not b.output().endswith(b'\r\n')
                 b.lib.Host_SetInput(5, 1)
                 b.finish()
-                assert b.output() == expected and b.output(1) == b''
+                assert b.output() == expected and b.output(1) == b'test\r\n'
                 b.finish(5000)
-                assert b.output(1) == b''
+                assert b.output(1) == b'test\r\n'
+                b.feed(1, SHORT + 'end\r\n')
+                b.finish()
+                assert b.output() == expected + frame('Short', 'OK', 'OK')
             else:
                 b.select_module(1)
                 if phase == 'sending_test':
@@ -572,14 +575,65 @@ def main():
                 b.feed(1, SHORT + 'end\r\n')
                 b.finish()
                 assert b.output() == expected + frame('Short', 'OK', 'OK')
-                assert b.output(1) == b'test\r\n'
-            # A low seen while busy is consumed, never queued into the next idle.
+                assert b.output(1) == b'test\r\n' * 2
             b.lib.Host_SetInput(5, 0)
             b.finish(100)
             b.lib.Host_SetInput(5, 1)
             b.finish(3000)
-            assert b.output(1) == (b'test\r\n' if phase in ['query_reply', 'error_reply'] else b'test\r\n' * 2)
-        test('X5 during ' + phase + ': consumed without restart/queued trigger', busy_x5)
+            assert b.output(1) == b'test\r\n' * (2 if phase in ['query_reply', 'error_reply'] else 3)
+        behavior = 'idle trigger deferred once' if phase in ['query_reply', 'error_reply'] else 'new trigger replaces active session'
+        test('X5 during ' + phase + ': ' + behavior, busy_x5)
+
+    def x5_query_pulse_snapshot():
+        b.select_module(1)
+        b.feed(2, '(RD_NUM)')
+        b.lib.Host_SetInput(5, 1)
+        b.finish(100)
+        assert b.output(1) == b''
+        b.lib.Host_SetInput(5, 0)
+        b.select_module(4)
+        b.finish(5000)
+        assert b.output() == query_result(1) and b.output(1) == b'test\r\n'
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == query_result(1) + frame('Short', 'OK', 'OK', 1)
+    test('X5 pulse during idle RD_NUM reply is retained with trigger-time module snapshot', x5_query_pulse_snapshot)
+
+    def x5_invalid_snapshot():
+        b.feed(2, '(RD_NUM)')
+        b.lib.Host_SetInput(5, 1)
+        b.finish(100)
+        b.lib.Host_SetInput(5, 0)
+        b.select_module(1)
+        b.finish(10000)
+        assert b.output() == ERR * 2 and b.output(1) == b''
+    test('X5 without a module while idle reply is pending retains invalid snapshot and replies ERR', x5_invalid_snapshot)
+
+    def x5_pending_start_priority():
+        b.select_module(1)
+        b.feed(2, '(STA')
+        b.lib.Host_SetInput(5, 1)
+        b.finish(100)
+        b.lib.Host_SetInput(5, 0)
+        b.finish(100)
+        b.select_module(2)
+        b.feed(2, 'RT,2)')
+        b.finish(5000)
+        b.feed(1, SHORT + 'end\r\n')
+        b.finish()
+        assert b.output(1) == b'test\r\n'
+        assert b.output() == frame('Short', 'OK', 'OK', 2)
+    test('complete START replaces deferred X5 request without double-starting', x5_pending_start_priority)
+
+    def x5_pending_command_error():
+        b.select_module(1)
+        b.feed(2, '(BA')
+        b.lib.Host_SetInput(5, 1)
+        b.finish(100)
+        b.feed(2, 'D)')
+        b.finish(10000)
+        assert b.output() == ERR and b.output(1) == b''
+    test('command error cancels deferred X5 request without a stale start after ERR', x5_pending_command_error)
 
     def latch_once():
         b.start(1)
@@ -647,6 +701,219 @@ def main():
             assert b.output() == (query_result(module) if module else ERR)
             assert b.output(1) == b''
     test('all 16 X1-X4 level combinations: only a unique low selects a module', every_module_combination)
+
+    def wait_for_bytes(port, length):
+        for _ in range(2000):
+            if len(b.output(port)) >= length:
+                return
+            b.finish(10)
+        raise AssertionError(f'UART{port} did not reach {length} bytes')
+
+    def begin_x5(module=1):
+        b.select_module(module)
+        b.lib.Host_SetInput(5, 1)
+        b.finish(3000)
+        assert b.output(1) == b'test\r\n'
+
+    def invalidate_module(module, kind):
+        if kind == 'disconnect':
+            b.select_module(0)
+        elif kind == 'change':
+            b.select_module(module % 4 + 1)
+        else:
+            b.lib.Host_SetInput(module % 4 + 1, 1)
+
+    for module in range(1, 5):
+        for kind in ['disconnect', 'change', 'multiple']:
+            def held_loss(module=module, kind=kind):
+                begin_x5(module)
+                b.feed(1, SHORT)
+                b.finish()
+                invalidate_module(module, kind)
+                b.finish(5000)
+                expected = frame('Short', 'OK', 'OK', module) + ERR
+                assert b.output() == expected and b.lib.Host_State() == 0
+                b.finish(4_000_000)
+                b.select_module(module)
+                b.feed(1, SHORT)
+                b.finish()
+                assert b.output() == expected and b.output(1) == b'test\r\n'
+                b.lib.Host_SetInput(5, 0)
+                b.finish(100)
+                target = module % 4 + 1
+                b.select_module(target)
+                b.lib.Host_SetInput(5, 1)
+                b.finish(3000)
+                b.feed(1, SHORT)
+                b.finish()
+                assert b.output(1) == b'test\r\n' * 2
+                assert b.output() == expected + frame('Short', 'OK', 'OK', target)
+            test(f'X{module} held-low watch: {kind} -> one ERR, no reconnect start, rearm with new MH', held_loss)
+
+    for kind in ['disconnect', 'change', 'multiple']:
+        def watch_after_end(kind=kind):
+            begin_x5()
+            b.feed(1, SHORT + 'end\r\n')
+            b.finish()
+            assert b.lib.Host_State() == 0
+            invalidate_module(1, kind)
+            b.finish(5000)
+            assert b.output() == frame('Short', 'OK', 'OK') + ERR
+            b.finish(4_000_000)
+            assert b.output() == frame('Short', 'OK', 'OK') + ERR
+        test('X5 held low continues module watch after end: ' + kind, watch_after_end)
+
+    def release_continue_retrigger():
+        begin_x5()
+        b.feed(1, SHORT)
+        b.finish()
+        b.lib.Host_SetInput(5, 0)
+        b.finish(100)
+        b.select_module(2)
+        b.feed(1, D1)
+        b.finish()
+        expected = frame('Short', 'OK', 'OK') + frame('D1-1', '2-5=12.6 V:NG')
+        assert b.output() == expected
+        b.feed(1, D1[:15])
+        b.lib.Host_SetInput(5, 1)
+        b.finish(3000)
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output(1) == b'test\r\n' * 2
+        assert b.output() == expected + frame('Short', 'OK', 'OK', 2)
+    test('release X5 keeps old upload MH; next low restarts without end and clears old fragment', release_continue_retrigger)
+
+    def held_fault_during_json():
+        begin_x5()
+        b.feed(1, D1)
+        b.finish(200)
+        assert b.output() and not b.output().endswith(b'\r\n')
+        b.select_module(0)
+        b.finish(100)
+        b.select_module(1)
+        b.finish(10000)
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR
+        assert b.output(1) == b'test\r\n'
+    test('held X5 module loss during JSON completes old frame then ERR; reconnect does not restart', held_fault_during_json)
+
+    def fault_and_new_trigger_during_json():
+        begin_x5()
+        b.feed(1, D1)
+        b.finish(200)
+        b.select_module(0)
+        b.finish(100)
+        b.lib.Host_SetInput(5, 0)
+        b.finish(100)
+        b.select_module(2)
+        b.lib.Host_SetInput(5, 1)
+        b.finish(100)
+        # New test cannot start until both the old JSON and ERR have been sent.
+        wait_for_bytes(2, len(frame('D1-1', '2-5=12.6 V:NG')) + len(ERR))
+        assert b.output(1) == b'test\r\n'
+        b.finish(3000)
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR
+        assert b.output(1) == b'test\r\n' * 2
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR + frame('Short', 'OK', 'OK', 2)
+    test('JSON in flight: loss, release, new low -> full old JSON, ERR, new test and MH', fault_and_new_trigger_during_json)
+
+    def latest_trigger_during_json():
+        begin_x5()
+        b.feed(1, D1)
+        b.finish(200)
+        for module in [2, 3, 4]:
+            b.lib.Host_SetInput(5, 0)
+            b.finish(10)
+            b.select_module(module)
+            b.lib.Host_SetInput(5, 1)
+            b.finish(10)
+        b.finish(15000)
+        assert b.output(1) == b'test\r\n' * 2
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + frame('Short', 'OK', 'OK', 4)
+    test('rapid X5 re-triggers during JSON retain only latest module and do not mix old MH', latest_trigger_during_json)
+
+    def pending_trigger_invalidated():
+        begin_x5()
+        b.feed(1, D1)
+        b.finish(200)
+        b.lib.Host_SetInput(5, 0)
+        b.finish(10)
+        b.select_module(2)
+        b.lib.Host_SetInput(5, 1)
+        b.finish(10)
+        b.select_module(0)
+        b.finish(10)
+        b.select_module(2)
+        b.finish(15000)
+        assert b.output(1) == b'test\r\n'
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR
+    test('held module loss cancels a deferred new test; reconnect cannot revive it', pending_trigger_invalidated)
+
+    def watch_during_query():
+        begin_x5()
+        b.feed(2, '(RD_NUM)')
+        assert b.output() and not b.output().endswith(b'\r\n')
+        b.select_module(0)
+        b.finish(10000)
+        assert b.output() == query_result(1) + ERR
+        assert b.output(1) == b'test\r\n'
+    test('X5 watch runs during RD_NUM reply; complete query JSON precedes disconnect ERR', watch_during_query)
+
+    for sent in range(1, 7):
+        def fault_mid_test(sent=sent):
+            b.select_module(1)
+            b.lib.Host_SetInput(5, 1)
+            wait_for_bytes(1, sent)
+            assert b.output(1) == b'test\r\n'[:sent]
+            b.select_module(0)
+            b.finish(5000)
+            assert b.output(1) == b'test\r\n'
+            assert b.output() == ERR and b.lib.Host_State() == 0
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output() == ERR
+        test(f'X5 module fault after test byte {sent}: finish UART1 command, ERR, no old results', fault_mid_test)
+
+    def fault_before_test():
+        b.select_module(1)
+        b.lib.Host_SetInput(5, 1)
+        b.finish(10)
+        assert b.lib.Host_State() == 1 and b.output(1) == b''
+        b.select_module(0)
+        b.finish(5000)
+        assert b.output() == ERR and b.output(1) == b''
+    test('module loss before first test byte cancels unsent command', fault_before_test)
+
+    def fault_retrigger_mid_test():
+        b.select_module(1)
+        b.lib.Host_SetInput(5, 1)
+        wait_for_bytes(1, 2)
+        b.select_module(0)
+        b.finish(10)
+        b.lib.Host_SetInput(5, 0)
+        b.finish(10)
+        b.select_module(2)
+        b.lib.Host_SetInput(5, 1)
+        b.finish(10000)
+        assert b.output(1) == b'test\r\n' * 2 and b.output() == ERR
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == ERR + frame('Short', 'OK', 'OK', 2)
+    test('partial test plus disconnect/retrigger -> two complete commands, ERR before new MH', fault_retrigger_mid_test)
+
+    def simultaneous_start_x5():
+        b.select_module(3)
+        b.feed(2, '(START,3)', spacing=0)
+        b.lib.Host_SetInput(5, 1)
+        b.finish(5000)
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output(1) == b'test\r\n'
+        assert b.output() == frame('Short', 'OK', 'OK', 3)
+    test('simultaneous matching START and X5 create only one test command', simultaneous_start_x5)
 
     LOG.append(f'ALL PASS: {passed} cases. Same C firmware core and RX-ring implementation; simulated UART/time only.')
     LOG.append('NOT VALIDATED: real MCU timing, internal RC drift, physical serial wiring, actual 828C application acceptance.')

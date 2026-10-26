@@ -28,7 +28,9 @@ static uint8 g_module_id, g_start_pos, g_command_len, g_command_discard;
 static uint8 g_error_pending, g_tx_kind, g_tx_phase, g_tx_index, g_tx_escape;
 static uint8 g_pending_byte, g_byte_pending, g_tx_finished;
 static uint16 g_line_scan;
-static uint8 g_x5_active;
+static uint8 g_x5_active, g_x5_watch_module;
+static uint8 g_x5_request; // 0：无请求；1～4：最新一次触发时的模号
+static uint8 g_start_busy; // 独立于会话状态，确保已开始的 test 指令完整发送
 static const char CODE *g_reply;
 
 #define TX_NONE    0u
@@ -712,8 +714,48 @@ static void AppComm_SetError(uint8 reason)
         app_last_error = reason;
     }
     g_error_pending = 1u;
-    app_state       = APP_IDLE;
+    g_x5_request    = 0u;
+    if (!g_start_pos)
+    {
+        g_start_busy = 0u; // 尚未发送任何字节的启动可直接取消
+    }
+    app_state = APP_IDLE;
     // 保留已经开始输出的合法记录，完整发送后再回复 ERR。
+}
+
+/**
+ * @brief  检测 X5 新触发，并持续监测低电平期间的锁定模号
+ * @param  无
+ * @retval 无
+ */
+static void AppComm_PollInputs(void)
+{
+    uint8 inputs, module;
+    inputs = InputControl_ReadActive();
+    if (!(inputs & 0x10u))
+    {
+        g_x5_active = g_x5_watch_module = 0u; // 释放仅解除监测，不结束上传会话
+        return;
+    }
+    module = InputControl_GetModule(inputs);
+    if (!g_x5_active)
+    {
+        g_x5_active       = 1u;
+        g_x5_watch_module = module;
+        if (module)
+        {
+            g_x5_request = module; // 忙时保留最新一次触发，不丢失脉冲
+        }
+        else
+        {
+            AppComm_SetError(APP_ERROR_MODULE);
+        }
+    }
+    else if (g_x5_watch_module && module != g_x5_watch_module)
+    {
+        g_x5_watch_module = 0u; // 本次持续低只报错一次，接回输入也不自动启动
+        AppComm_SetError(APP_ERROR_MODULE);
+    }
 }
 
 /**
@@ -723,10 +765,12 @@ static void AppComm_SetError(uint8 reason)
  */
 static void AppComm_StartSession(uint8 id)
 {
-    g_module_id = id;
+    g_module_id  = id;
+    g_x5_request = 0u; // START 与 X5 同时到达时只执行一次启动
     Uart1_ClearRx();
     g_line_scan    = 0u;
     g_start_pos    = 0u;
+    g_start_busy   = 1u;
     app_last_error = APP_ERROR_NONE;
     app_state      = APP_SENDING_START;
 }
@@ -961,7 +1005,11 @@ static void AppComm_PollStartCommand(void)
     }
     else if (Uart1_TxIdle())
     {
-        app_state = APP_WAIT_FIRST; // 等待首条记录，不设置超时
+        g_start_busy = 0u;
+        if (app_state == APP_SENDING_START)
+        {
+            app_state = APP_WAIT_FIRST; // 等待首条记录，不设置超时
+        }
     }
 }
 
@@ -984,6 +1032,7 @@ void AppComm_Init(void)
     g_byte_pending = g_tx_finished = 0u;
     g_line_scan                    = 0u;
     g_x5_active                    = 0u; // 上电已为低的 X5 在首次轮询时也检测一次
+    g_x5_watch_module = g_x5_request = g_start_busy = 0u;
     Uart1_ClearRx();
     Uart2_ClearRx();
 }
@@ -995,10 +1044,8 @@ void AppComm_Init(void)
  */
 void AppComm_Poll(void)
 {
-    uint8 c, inputs, x5_trigger, module;
-    inputs      = InputControl_ReadActive();
-    x5_trigger  = (uint8)((inputs & 0x10u) && !g_x5_active);
-    g_x5_active = (uint8)(inputs & 0x10u); // 忙时同样更新锁存，不排队补发
+    uint8 c;
+    AppComm_PollInputs(); // 在任何串口发送提前返回之前处理输入失效和重触发
     if (Uart1_Overflow() && app_state != APP_IDLE)
     {
         AppComm_SetError(APP_ERROR_UART1_FULL);
@@ -1015,6 +1062,11 @@ void AppComm_Poll(void)
         AppComm_PollTx();
         return;
     }
+    if (g_start_busy)
+    {
+        AppComm_PollStartCommand(); // 会话已取消时也先发完已开始的 test
+        return;
+    }
     if (g_error_pending)
     {
         Uart1_ClearRx();
@@ -1024,35 +1076,23 @@ void AppComm_Poll(void)
         AppComm_StartTx(TX_LITERAL);
         return;
     }
-    if (app_state == APP_SENDING_START)
-    {
-        AppComm_PollStartCommand();
-        return;
-    }
     if (Uart2_ReadByte(&c))
     {
         AppComm_HandleCommandByte(c);
-        if (g_tx_kind || g_error_pending || app_state == APP_SENDING_START)
+        if (g_tx_kind || g_error_pending || g_start_busy)
         {
             return;
         }
+    }
+    if (g_x5_request && !g_command_len && !g_command_discard)
+    {
+        AppComm_StartSession(g_x5_request); // 不等待旧会话 end，清理后开始新一轮
+        return;
     }
     if (app_state == APP_IDLE)
     {
         Uart1_ClearRx();
         g_line_scan = 0u;
-        if (x5_trigger && !g_command_len && !g_command_discard)
-        {
-            module = InputControl_GetModule(inputs);
-            if (module)
-            {
-                AppComm_StartSession(module);
-            }
-            else
-            {
-                AppComm_SetError(APP_ERROR_MODULE);
-            }
-        }
         return;
     }
     AppComm_PollBoard();
