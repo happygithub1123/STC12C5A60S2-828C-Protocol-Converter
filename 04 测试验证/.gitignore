@@ -1,0 +1,5 @@
+results/*.dll
+results/*.obj
+results/*.lib
+results/*.exp
+__pycache__/

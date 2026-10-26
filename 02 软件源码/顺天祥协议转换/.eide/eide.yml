@@ -1,0 +1,155 @@
+version: "4.1"
+name: Project
+type: C51
+deviceName: null
+packDir: null
+srcDirs: []
+virtualFolder:
+  name: <virtual_root>
+  files: []
+  folders:
+    - name: User
+      files:
+        - path: User/main.c
+        - path: User/STARTUP.A51
+      folders: []
+    - name: App
+      files:
+        - path: App/app_comm.c
+        - path: App/app_comm.h
+      folders: []
+    - name: System
+      files:
+        - path: System/System.c
+        - path: System/System.h
+        - path: System/Uart1.c
+        - path: System/Uart1.h
+        - path: System/Uart2.c
+        - path: System/Uart2.h
+      folders: []
+    - name: Public
+      files:
+        - path: Public/STC12C5A60S2.h
+        - path: Public/project_types.h
+        - path: Public/board_config.h
+        - path: Public/Public_cfg.h
+      folders: []
+dependenceList: []
+outDir: build
+miscInfo:
+  uid: 1e00424bb3470bb4f1f96b96fa27bf7d
+targets:
+  828C ISP MEASURED:
+    cppPreprocessAttrs:
+      defineList: []
+      incList:
+        - D:\Keil_v5\C51\INC\Public
+        - User
+        - App
+        - System
+        - Public
+      libList: []
+    excludeList: []
+    settings:
+      debugger: unknown
+    toolchain: Keil_C51
+    toolchainConfigMap:
+      Keil_C51:
+        options:
+          version: 2
+          afterBuildTasks: []
+          asm-compiler: {}
+          beforeBuildTasks: []
+          c/cpp-compiler:
+            optimization-level: level-8
+            optimization-type: SPEED
+          global:
+            ram-mode: SMALL
+            rom-mode: LARGE
+          linker:
+            misc-controls: ""
+            output-format: elf
+            remove-unused: true
+    uploadConfigMap:
+      Custom:
+        bin: ""
+        commandLine: ""
+        eraseChipCommand: ""
+    uploader: Custom
+  828C TEST CLOCK:
+    cppPreprocessAttrs:
+      defineList:
+        - BRIDGE_BUILD_TEST
+      incList:
+        - D:/Keil_v5/C51/INC/Public
+        - User
+        - App
+        - System
+        - Public
+      libList: []
+    excludeList: []
+    settings:
+      debugger: unknown
+    toolchain: Keil_C51
+    toolchainConfigMap:
+      Keil_C51:
+        options:
+          version: 2
+          afterBuildTasks: []
+          asm-compiler: {}
+          beforeBuildTasks: []
+          c/cpp-compiler:
+            optimization-level: level-8
+            optimization-type: SPEED
+          global:
+            ram-mode: SMALL
+            rom-mode: LARGE
+          linker:
+            misc-controls: ""
+            output-format: elf
+            remove-unused: true
+    uploadConfigMap:
+      Custom:
+        bin: ""
+        commandLine: ""
+        eraseChipCommand: ""
+    uploader: Custom
+  Target 1:
+    cppPreprocessAttrs:
+      defineList: []
+      incList:
+        - D:/Keil_v5/C51/INC/STC
+        - User
+        - App
+        - Control
+        - Hardware
+        - System
+        - Public
+      libList: []
+    excludeList: []
+    settings:
+      debugger: unknown
+    toolchain: Keil_C51
+    toolchainConfigMap:
+      Keil_C51:
+        options:
+          version: 2
+          afterBuildTasks: []
+          asm-compiler: {}
+          beforeBuildTasks: []
+          c/cpp-compiler:
+            optimization-level: level-8
+            optimization-type: SPEED
+          global:
+            ram-mode: LARGE
+            rom-mode: LARGE
+          linker:
+            misc-controls: ""
+            output-format: elf
+            remove-unused: true
+    uploadConfigMap:
+      Custom:
+        bin: ""
+        commandLine: ""
+        eraseChipCommand: ""
+    uploader: Custom

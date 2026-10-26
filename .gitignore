@@ -1,0 +1,36 @@
+# 编译产物和自动日志
+**/build/
+**/BuildTest/
+**/BuildMeasured/
+**/Objects/
+**/Listings/
+*.obj
+*.OBJ
+*.lst
+*.LST
+*.hex
+*.HEX
+*.m51
+*.M51
+*.lnp
+*.dll
+*.lib
+*.exp
+*.log
+~$*
+*.build_log.htm
+__pycache__/
+**/results/*
+!**/results/sample_expected.jsonl
+!**/results/sample_mapping.json
+
+# 本机 IDE 状态
+*.uvgui.*
+*.uvopt
+*.uvoptx
+**/.eide/log/
+**/.eide.usr.ctx.json
+**/.vscode/launch.json
+
+# 数据手册只纳入 03 数据手册中的一份
+/02 软件源码/顺天祥协议转换/STC12C5A60S2-35I-PDIP40.PDF
