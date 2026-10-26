@@ -13,8 +13,9 @@ typedef struct {
     uint8 ng;
     uint16 body_left;
     uint16 suffix;
+    uint16 point_left;
     uint16 value_left;
-    uint16 value_skip;
+    uint16 point_skip;
 } Record;
 
 static Record XDATA record;
@@ -93,11 +94,9 @@ static uint8 Number(uint16 begin, uint16 end)
     return (uint8)(begin == end);
 }
 
-static uint8 CopyField(uint16 begin, uint16 end, uint8 *dest, uint8 maximum)
+static uint8 ValidText(uint16 begin, uint16 end)
 {
-    uint8 c, at, remaining, low, high;
-    if (end - begin > maximum) return 0u;
-    at = 0u;
+    uint8 c, remaining, low, high;
     remaining = 0u;
     low = 0x80u;
     high = 0xBFu;
@@ -123,10 +122,18 @@ static uint8 CopyField(uint16 begin, uint16 end, uint8 *dest, uint8 maximum)
                 if (c == 0xF4u) high = 0x8Fu;
             } else return 0u;
         }
-        dest[at++] = c;
     }
-    dest[at] = 0u;
     return (uint8)(remaining == 0u);
+}
+
+static uint8 CopyField(uint16 begin, uint16 end, uint8 *dest, uint8 maximum)
+{
+    uint8 at;
+    if (end - begin > maximum || !ValidText(begin, end)) return 0u;
+    at = 0u;
+    while (begin < end) dest[at++] = Uart1_Peek(begin++);
+    dest[at] = 0u;
+    return 1u;
 }
 
 static uint8 ValidateBody(uint16 begin, uint16 end)
@@ -152,7 +159,7 @@ static uint8 ValidateBody(uint16 begin, uint16 end)
         begin = a;
         a = eq;
         Trim(&begin, &a);
-        if (begin == a) return 0u;
+        if (begin == a || !ValidText(begin, a)) return 0u;
         a = eq + 1u;
         Trim(&a, &b);
         if (!Number(a, b)) return 0u;
@@ -206,7 +213,7 @@ static uint8 ParseRecord(uint16 length)
 
 static uint8 LoadValue(void)
 {
-    uint16 stop, eq, begin, end;
+    uint16 stop, eq, begin, end, point_begin, point_end;
     while (record.body_left && Space(Uart1_Peek(0u))) {
         Uart1_Drop(1u);
         --record.body_left;
@@ -219,11 +226,32 @@ static uint8 LoadValue(void)
     begin = eq + 1u;
     end = stop;
     Trim(&begin, &end);
+    point_begin = 0u;
+    point_end = eq;
+    Trim(&point_begin, &point_end);
+    record.point_left = point_end - point_begin;
+    record.point_skip = begin - point_end;
     record.value_left = end - begin;
-    record.value_skip = stop - end;
-    if (stop < record.body_left) ++record.value_skip;
-    Uart1_Drop(begin);
-    record.body_left -= begin;
+    Uart1_Drop(point_begin);
+    record.body_left -= point_begin;
+    return 1u;
+}
+
+static uint8 EscapedPoint(uint8 *out)
+{
+    uint8 c;
+    if (!record.point_left) return 0u;
+    c = Uart1_Peek(0u);
+    if (!tx_escape && (c == '"' || c == '\\')) {
+        tx_escape = 1u;
+        *out = '\\';
+    } else {
+        tx_escape = 0u;
+        *out = c;
+        Uart1_Drop(1u);
+        --record.point_left;
+        --record.body_left;
+    }
     return 1u;
 }
 
@@ -262,9 +290,19 @@ static uint8 NextJsonByte(uint8 *out)
             tx_index = 0u; ++tx_phase; continue;
         case 6: text = "\":\""; break;
         case 7:
-            tx_phase = LoadValue() ? 8u : 13u;
+            tx_phase = LoadValue() ? 8u : 14u;
             continue;
         case 8:
+            if (EscapedPoint(out)) return 1u;
+            ++tx_phase;
+            continue;
+        case 9:
+            Uart1_Drop(record.point_skip);
+            record.body_left -= record.point_skip;
+            *out = '=';
+            ++tx_phase;
+            return 1u;
+        case 10:
             if (record.value_left) {
                 *out = Uart1_Peek(0u);
                 Uart1_Drop(1u);
@@ -272,26 +310,25 @@ static uint8 NextJsonByte(uint8 *out)
                 --record.body_left;
                 return 1u;
             }
-            Uart1_Drop(record.value_skip);
-            record.body_left -= record.value_skip;
+            Uart1_Drop(record.body_left);
+            record.body_left = 0u;
             ++tx_phase;
             continue;
-        case 9:
+        case 11:
+            ++tx_phase;
+            if (record.unit[0]) { *out = ' '; return 1u; }
+            continue;
+        case 12:
             if (EscapedString(record.unit, out)) return 1u;
             tx_index = 0u; ++tx_phase; continue;
-        case 10: text = ":"; break;
-        case 11: text = record.ng ? ng_text : ok_text; break;
-        case 12:
-            if (LoadValue()) { tx_phase = 8u; *out = ';'; return 1u; }
-            tx_phase = 14u;
-            continue;
-        case 13: text = record.ng ? ng_text : ok_text; break;
-        case 14:
+        case 13: text = ":"; break;
+        case 14: text = record.ng ? ng_text : ok_text; break;
+        case 15:
             Uart1_Drop(record.suffix);
             record.suffix = 0u;
             ++tx_phase;
             continue;
-        case 15: text = "\"}\r\n"; break;
+        case 16: text = "\"}\r\n"; break;
         default: return 0u;
         }
         if (text[tx_index]) { *out = (uint8)text[tx_index++]; return 1u; }
