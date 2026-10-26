@@ -1,0 +1,6 @@
+{"MH":"1","Result":"NG","D1-1":"2-5=12.6 V:NG"}
+{"MH":"1","Result":"OK","D1-2":"5-2=8.20 V:OK"}
+{"MH":"1","Result":"NG","Open":"8-78=978.4 ohm:NG"}
+{"MH":"1","Result":"OK","Short":"OK"}
+{"MH":"1","Result":"OK","Custom":"p=1.250:OK"}
+{"MH":"1","Result":"OK","ILeak":"1-2=+0.0100 mA:OK"}

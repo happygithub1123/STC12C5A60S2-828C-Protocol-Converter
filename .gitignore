@@ -13,6 +13,9 @@
 *.m51
 *.M51
 *.lnp
+*.__i
+*.crf
+*.tmp
 *.dll
 *.lib
 *.exp

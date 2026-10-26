@@ -90,9 +90,9 @@
 
 ## 构建与使用
 
-在 STC-ISP 中选择内部 RC，确保实际频率与 `Public/board_config.h` 的 `PROJECT_FOSC_HZ=22118400UL` 相符。两路共享 BRT，1T、倍速；分频值 12、重装值 0xF4，理论波特率为 115200。生成波特率误差超过 2% 时拒绝编译。
+在 STC-ISP 中将内部 RC 设为 22.1184 MHz。UART1 和 UART2 均固定为：**115200、8 位数据、无校验、1 位停止位**，无需分别设置波特率。
 
-打开 Keil `Project.uvproj`，选择唯一目标 **828C INTERNAL RC 22.1184MHz** 重建。EIDE 同样配置为该目标，使用 SMALL 内存模型及片内 XRAM 边界。
+打开 Keil `Project.uvproj`，选择唯一目标 **828C Protocol Conversion Project** 重建。EIDE 同样配置为该目标，使用 SMALL 内存模型及片内 XRAM 边界。
 
 在仓库根目录用 Python 3 运行：
 
@@ -101,9 +101,9 @@ python "04 测试验证/build_keil.py"
 python "04 测试验证/run_tests.py"
 ```
 
-构建脚本默认使用 `D:/Keil_v5`，可用 `--keil` 指定路径；`--fosc 22118400` 可显式指定内部 RC 频率。主机测试通过 vswhere 查找 Visual Studio C++ 工具链。脚本频率参数不会改写 IDE 配置，改变硬件频率时应同步板级配置和 IDE 时钟。
+构建脚本默认使用 `D:/Keil_v5`，可用 `--keil` 指定路径。时钟与串口参数固定在工程中；主机测试通过 vswhere 查找 Visual Studio C++ 工具链。
 
-当前 HEX 输出到 `02 软件源码/顺天祥协议转换/BuildMeasured/Bridge828C.hex`，仅在本地保留。以本次构建退出成功和日志为准；失败时旧 HEX 可能仍存在。旧 Objects、Listings、BuildTest 等缓存不属于本轮交付产物。
+Keil 与构建脚本的 HEX 输出到 `02 软件源码/顺天祥协议转换/Objects/Bridge828C.hex`，仅在本地保留；EIDE 的输出根目录同样为 Objects，其构建器会在其中按目标建立子目录。以本次构建退出成功和日志为准；失败时旧 HEX 可能仍存在。旧 Project.hex、旧构建缓存及临时日志已清理，当前固件保留。下次编译会重新生成所需 OBJ、列表和日志文件。
 
 ## 验证状态
 

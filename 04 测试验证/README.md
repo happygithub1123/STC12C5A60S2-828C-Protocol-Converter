@@ -2,6 +2,8 @@
 
 汇总结果、串口对照样例及现场验收表见 [测试验证.md](测试验证.md)；阶段历史见 [程序编写验证记录](程序编写验证记录.md)。
 
+实际串口调试请先看 [串口调试实例.md](串口调试实例.md)，其中包含双窗口接线、可复制的发送内容、预期 JSON，以及超时与恢复步骤。可载入的数据在 [串口测试数据](串口测试数据) 中。
+
 在仓库根目录运行（Python 3，Windows）：
 
 ```text
@@ -9,7 +11,7 @@ python "04 测试验证/run_tests.py"
 python "04 测试验证/build_keil.py"
 ```
 
-主机测试通过 vswhere 查找 Visual Studio C++ 工具链；Keil 默认路径 D:/Keil_v5，可用 --keil 指定其他安装。默认正式频率为 22118400 Hz，可显式传 --fosc 22118400。默认构建输出 BuildMeasured/Bridge828C.hex，不再使用旧测试时钟目标。
+主机测试通过 vswhere 查找 Visual Studio C++ 工具链；Keil 默认路径 D:/Keil_v5，可用 --keil 指定其他安装。内部 RC 固定为 22.1184 MHz，两路串口均为 115200、8 位数据、无校验、1 位停止位。默认构建输出 Objects/Bridge828C.hex。
 
 ## 自动验证
 
@@ -30,12 +32,14 @@ python "04 测试验证/build_keil.py"
 | --- | --- | --- |
 | results/test_results.txt | 各项用例、UART1 十六进制、UART2 字符串、接收峰值和错误码 | 否 |
 | results/host_build.log | 主机编译记录，警告视为错误 | 否 |
-| results/uv4_build.log | µVision 直接重建记录 | 否 |
+| 源码工程 Objects/uv4_828c_build.log | µVision 直接重建记录 | 否 |
 | results/sample_mapping.json | 样本原文与新协议期望 JSON | 是 |
 | results/sample_expected.jsonl | CRLF 分帧的期望串口字节 | 是 |
 | 程序编写验证记录.md | 分阶段验证结论与人工验收状态 | 是 |
 
-Keil 脚本的完整日志和链接图保存在源码工程 BuildMeasured 中，仅本地保留。链接检查使用片内 256 字节 IRAM、1024 字节 XRAM、60 KiB 程序区，并要求至少 64 字节静态栈空间。
+Keil 脚本的完整日志和链接图保存在源码工程 Objects 中，仅本地保留。链接检查使用片内 256 字节 IRAM、1024 字节 XRAM、60 KiB 程序区，并要求至少 64 字节静态栈空间。
+
+编译缓存和临时日志已按需清理；上述日志路径是重新运行构建／测试后生成的位置。已通过的结论保留在测试验证.md 和程序编写验证记录.md 中，本次清理未重新编译，避免立即生成中间文件。
 
 ## 实物验收（待执行）
 
