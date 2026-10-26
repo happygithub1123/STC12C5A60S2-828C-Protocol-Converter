@@ -34,7 +34,7 @@ void Uart1_Init(void)
     P3M1 = (P3M1 & 0xFCu) | 0x01u;
     P3M0 = (P3M0 & 0xFCu) | 0x02u;
     P3 |= 0x03u;
-    SCON            = 0x50u; // 模式1、8N1，允许接收并清除 RI/TI
+    SCON            = 0x50u; // 8位数据、无校验、1位停止，允许接收
     g_uart1_tx_busy = 0u;
     ES              = 1;
 #endif

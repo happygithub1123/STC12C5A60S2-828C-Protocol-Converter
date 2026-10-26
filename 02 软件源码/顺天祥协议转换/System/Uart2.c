@@ -35,7 +35,7 @@ void Uart2_Init(void)
     P1M1 = (P1M1 & 0xF3u) | 0x04u;
     P1M0 = (P1M0 & 0xF3u) | 0x08u;
     P1 |= 0x0Cu;
-    S2CON           = 0x50u; // 模式1、8N1，允许接收并清除 RI2/TI2
+    S2CON           = 0x50u; // 8位数据、无校验、1位停止，允许接收
     g_uart2_tx_busy = 0u;
     IE2 |= 0x01u;
 #endif

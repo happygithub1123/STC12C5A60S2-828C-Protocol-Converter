@@ -39,11 +39,11 @@ virtualFolder:
         - path: Public/board_config.h
       folders: []
 dependenceList: []
-outDir: build
+outDir: Objects
 miscInfo:
   uid: 1e00424bb3470bb4f1f96b96fa27bf7d
 targets:
-  828C INTERNAL RC 22.1184MHz:
+  828C Protocol Conversion Project:
     cppPreprocessAttrs:
       defineList: []
       incList: [User, App, Control, System, Public]

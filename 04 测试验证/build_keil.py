@@ -12,14 +12,12 @@ PROJECT = ROOT / '02 软件源码' / '顺天祥协议转换'
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--keil', default='D:/Keil_v5')
-    parser.add_argument('--fosc', type=int, default=22118400, help='ISP internal RC frequency in Hz (default: 22118400)')
     args = parser.parse_args()
     tool = Path(args.keil) / 'C51' / 'BIN'
     name = 'Bridge828C'
-    out = PROJECT / 'BuildMeasured'
+    out = PROJECT / 'Objects'
     out.mkdir(exist_ok=True)
-    lines = ['Clock mode: internal RC (operator confirmed)', f'FOSC_HZ={args.fosc}', '']
-    define = f'PROJECT_FOSC_HZ={args.fosc}UL'
+    lines = ['Internal RC: 22.1184 MHz', 'UART1/UART2: 115200, 8 data bits, no parity, 1 stop bit', '']
     sources = ['User/main.c', 'App/app_comm.c', 'Control/input_control.c', 'System/System.c', 'System/Uart1.c', 'System/Uart2.c']
     objects = []
 
@@ -37,7 +35,7 @@ def main():
             stem = Path(src).stem
             obj = (out / (stem + '.obj')).relative_to(PROJECT).as_posix()
             listing = (out / (stem + '.lst')).relative_to(PROJECT).as_posix()
-            run('C51.exe', [src, 'SMALL', 'OPTIMIZE(8,SPEED)', f'DEFINE({define})',
+            run('C51.exe', [src, 'SMALL', 'OPTIMIZE(8,SPEED)',
                             'INCDIR(.\\Public;.\\System;.\\App;.\\Control)', f'OBJECT({obj})', f'PRINT({listing})'])
             objects.append(obj)
         startup = (out / 'STARTUP.obj').relative_to(PROJECT).as_posix()

@@ -28,7 +28,7 @@ void Sys_Init(void)
     AUXR = 0x0Du;                  // BRT 暂停、1T，串口1选 BRT，串口2倍速
     PCON = (PCON & 0xBFu) | 0x80u; // UART1 倍速且清除帧错误检测模式
     WAKE_CLKO &= 0xF8u;            // 关闭时钟输出，保留输入引脚用途
-    BRT = (uint8)BRT_RELOAD;       // 22.1184 MHz 对应 0xF4，波特率 115200
+    BRT = 0xF4u;                   // 22.1184 MHz 下，两路串口固定 115200
     Uart1_Init();
     Uart2_Init();
     AUXR |= 0x10u; // 两路配置完成后启动共享波特率发生器
