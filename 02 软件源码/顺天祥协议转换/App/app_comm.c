@@ -28,9 +28,10 @@ static uint8 g_module_id, g_start_pos, g_command_len, g_command_discard;
 static uint8 g_error_pending, g_tx_kind, g_tx_phase, g_tx_index, g_tx_escape;
 static uint8 g_pending_byte, g_byte_pending, g_tx_finished;
 static uint16 g_line_scan;
-static uint8 g_x5_active, g_x5_watch_module;
-static uint8 g_x5_request; // 0：无请求；1～4：最新一次触发时的模号
-static uint8 g_start_busy; // 独立于会话状态，确保已开始的 test 指令完整发送
+static uint8 g_x5_active, g_fixture_module;
+static uint8 g_x5_retrigger_required; // 模号失效后，仅新的有效 X5 触发可解除锁定
+static uint8 g_x5_request;            // 0：无请求；1～4：最新一次触发时的模号
+static uint8 g_start_busy;            // 独立于会话状态，确保已开始的 test 指令完整发送
 static const char CODE *g_reply;
 
 #define TX_NONE    0u
@@ -724,7 +725,7 @@ static void AppComm_SetError(uint8 reason)
 }
 
 /**
- * @brief  检测 X5 新触发，并持续监测低电平期间的锁定模号
+ * @brief  持续监测治具模号，断开后等待 X5 重新触发
  * @param  无
  * @retval 无
  */
@@ -732,28 +733,31 @@ static void AppComm_PollInputs(void)
 {
     uint8 inputs, module;
     inputs = InputControl_ReadActive();
+    module = InputControl_GetModule(inputs);
     if (!(inputs & 0x10u))
     {
-        g_x5_active = g_x5_watch_module = 0u; // 释放仅解除监测，不结束上传会话
-        return;
+        g_x5_active = 0u; // 释放只重新武装 X5，不能解除断开锁定或停止模号监测
     }
-    module = InputControl_GetModule(inputs);
-    if (!g_x5_active)
+    else if (!g_x5_active)
     {
-        g_x5_active       = 1u;
-        g_x5_watch_module = module;
+        g_x5_active      = 1u;
+        g_fixture_module = module;
         if (module)
         {
-            g_x5_request = module; // 忙时保留最新一次触发，不丢失脉冲
+            g_x5_retrigger_required = 0u;
+            g_x5_request            = module; // 忙时保留最新一次触发，不丢失脉冲
         }
         else
         {
+            g_x5_retrigger_required = 1u;
             AppComm_SetError(APP_ERROR_MODULE);
         }
+        return;
     }
-    else if (g_x5_watch_module && module != g_x5_watch_module)
+    if (g_fixture_module && module != g_fixture_module)
     {
-        g_x5_watch_module = 0u; // 本次持续低只报错一次，接回输入也不自动启动
+        g_fixture_module        = 0u; // 断开只主动报错一次，接回或释放 X5 都不恢复
+        g_x5_retrigger_required = 1u;
         AppComm_SetError(APP_ERROR_MODULE);
     }
 }
@@ -765,8 +769,9 @@ static void AppComm_PollInputs(void)
  */
 static void AppComm_StartSession(uint8 id)
 {
-    g_module_id  = id;
-    g_x5_request = 0u; // START 与 X5 同时到达时只执行一次启动
+    g_module_id      = id;
+    g_fixture_module = id; // START 启动的会话同样持续检测，不依赖 X5 电平
+    g_x5_request     = 0u; // START 与 X5 同时到达时只执行一次启动
     Uart1_ClearRx();
     g_line_scan    = 0u;
     g_start_pos    = 0u;
@@ -846,7 +851,7 @@ static void AppComm_ExecuteCommand(void)
              g_command[7] >= '1' && g_command[7] <= '4')
     {
         module = InputControl_GetModule(InputControl_ReadActive());
-        if (module && module == g_command[7] - '0')
+        if (module && module == g_command[7] - '0' && !g_x5_retrigger_required)
         {
             AppComm_StartSession(module);
         }
@@ -1032,7 +1037,8 @@ void AppComm_Init(void)
     g_byte_pending = g_tx_finished = 0u;
     g_line_scan                    = 0u;
     g_x5_active                    = 0u; // 上电已为低的 X5 在首次轮询时也检测一次
-    g_x5_watch_module = g_x5_request = g_start_busy = 0u;
+    g_fixture_module = g_x5_request = g_start_busy = 0u;
+    g_x5_retrigger_required                        = 0u;
     Uart1_ClearRx();
     Uart2_ClearRx();
 }
