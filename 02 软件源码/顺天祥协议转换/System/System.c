@@ -7,12 +7,26 @@
  内部定义
  *============================================================================*/
 
+static volatile uint16 g_milliseconds;
+
+/**
+ * @brief  Timer0 内部计时中断，仅提供按键消抖所需的约 1 ms 时基
+ * @param  无
+ * @retval 无
+ */
+void Sys_Timer0Interrupt(void) interrupt 1
+{
+    TH0 = 0xF8u;
+    TL0 = 0xCDu; // 22.1184 MHz / 12，1843 个计数约为 1 ms
+    ++g_milliseconds;
+}
+
 /*==============================================================================
  对外函数
  *============================================================================*/
 
 /**
- * @brief  初始化系统时钟分频和双串口
+ * @brief  初始化系统时钟分频、双串口及按键消抖时基
  * @param  无
  * @retval 无
  */
@@ -31,11 +45,34 @@ void Sys_Init(void)
     Uart2_Init();
     AUXR |= 0x10u; // 两路配置完成后启动共享波特率发生器
 
-    TR0 = 0; // 不再使用通信超时，保持 Timer0 和外部中断关闭
-    TF0 = 0;
+    TR0 = 0;
+    AUXR &= 0x7Fu;                           // Timer0 使用 12T；不改变共享 BRT 的串口设置
+    TMOD           = (TMOD & 0xF0u) | 0x01u; // 16 位内部计时，C/T=0、GATE=0，不占用 P3.4
+    TH0            = 0xF8u;
+    TL0            = 0xCDu;
+    g_milliseconds = 0u;
+    TF0            = 0;
+    ET0            = 1; // 只启用时基，不启用外部中断或通信超时
+    TR0            = 1;
     // UART1 使用高优先级，减少连续输入的接收延迟。
     IP   = 0x10u;
     IPH  = 0u;
     IP2  = 0u;
     IPH2 = 0u;
+}
+
+/**
+ * @brief  短暂保护中断，避免读取到撕裂的 16 位计数
+ * @param  无
+ * @retval 当前毫秒计数，65536 后回绕
+ */
+uint16 Sys_Millis(void)
+{
+    uint8 enabled;
+    uint16 now;
+    enabled = EA;
+    EA      = 0;
+    now     = g_milliseconds;
+    EA      = enabled;
+    return now;
 }

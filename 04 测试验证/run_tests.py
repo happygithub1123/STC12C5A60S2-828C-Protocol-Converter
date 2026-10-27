@@ -316,19 +316,17 @@ def main():
     test('old 16-bit millisecond wraparound does not end session', rollover)
 
     def restart():
-        b.start()
+        b.start(2)
         b.feed(1, D1)
         b.finish(500)
-        b.select_module(2)
-        b.lib.Host_SetInput(5, 1)
         b.feed(2, '(START,2)\r\n')
         b.finish(15000)
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG')
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG', module=2)
         assert b.output(1) == b'test\r\ntest\r\n'
         b.feed(1, SHORT)
         b.finish()
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + frame('Short', 'OK', 'OK', 2)
-    test('new START with matching fresh X5 waits for complete JSON then replaces session once', restart)
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG', module=2) + frame('Short', 'OK', 'OK', 2)
+    test('matching START with X5 high waits for complete JSON then replaces session once', restart)
 
     def end():
         b.start()
@@ -431,6 +429,35 @@ def main():
         assert b.lib.Host_InputRegister(2) == 0x81
     test('GPIO init releases X1-X5 and preserves P3.0, P3.1 and P3.7', input_configuration)
 
+    def release_button():
+        b.lib.Host_SetInput(5, 0)
+        b.finish(21000)
+
+    def press_button():
+        b.lib.Host_SetInput(5, 1)
+        b.finish(23000)
+
+    def begin_button(module=1):
+        b.select_module(module)
+        release_button()
+        press_button()
+        assert b.output(1) == b'test\r\n'
+
+    def wait_for_bytes(port, length):
+        for _ in range(5000):
+            if len(b.output(port)) >= length:
+                return
+            b.finish(10)
+        raise AssertionError(f'UART{port} did not reach {length} bytes')
+
+    def invalidate(module, kind):
+        if kind == 'disconnect':
+            b.select_module(0)
+        elif kind == 'change':
+            b.select_module(module % 4 + 1)
+        else:
+            b.lib.Host_SetInput(module % 4 + 1, 1)
+
     for module in range(1, 5):
         def module_query(module=module):
             b.select_module(module)
@@ -438,15 +465,36 @@ def main():
             b.finish(5000)
             assert b.output() == query_result(module)
             assert b.output(1) == b'' and b.lib.Host_State() == 0
-        test(f'RD_NUM reads current X{module}, not a software default', module_query)
+        test(f'RD_NUM live module {module}, query does not start', module_query)
 
-        def wrong_module(module=module):
+        def button_click(module=module):
+            begin_button(module)
+            release_button()
+            b.feed(1, D1 + SHORT)
+            b.finish()
+            assert b.output(1) == bytes.fromhex('74 65 73 74 0d 0a')
+            assert b.output() == frame('D1-1', '2-5=12.6 V:NG', module=module) + frame('Short', 'OK', 'OK', module)
+        test(f'X{module}: press then release, keep receiving correct MH', button_click)
+
+        def boot_held(module=module):
+            b.select_module(module)
+            b.lib.Host_SetInput(5, 1)
+            b.finish(4_000_000)
+            assert b.output() == b'' and b.output(1) == b''
+            release_button()
+            press_button()
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output(1) == b'test\r\n'
+            assert b.output() == frame('Short', 'OK', 'OK', module)
+        test(f'X{module}: held low at boot never starts; release then press starts once', boot_held)
+
+        def mismatch(module=module):
             b.select_module(module)
             target = module % 4 + 1
             b.feed(2, f'(START,{target})')
             b.finish(5000)
             assert b.output() == ERR and b.output(1) == b''
-            assert b.lib.Host_State() == 0 and b.lib.Host_Error() == 6
             b.select_module(target)
             b.finish(4_000_000)
             assert b.output() == ERR and b.output(1) == b''
@@ -455,18 +503,40 @@ def main():
             b.feed(1, SHORT)
             b.finish()
             assert b.output() == ERR + frame('Short', 'OK', 'OK', target)
-        test(f'START mismatch with X{module}: immediate one ERR, no delayed start, recovery', wrong_module)
+        test(f'START mismatch X{module}, repair then matching command recovers without button', mismatch)
 
-        def x5_module(module=module):
-            b.select_module(module)
-            b.lib.Host_SetInput(5, 1)
-            b.finish(3000)
-            assert b.output(1) == bytes.fromhex('74 65 73 74 0d 0a')
-            b.feed(1, SHORT + 'end\r\n')
-            b.finish(4_000_000)
-            assert b.output() == frame('Short', 'OK', 'OK', module)
-            assert b.output(1) == b'test\r\n' and b.lib.Host_State() == 0
-        test(f'X5 initial low directly starts X{module} MH once; held low after end does not restart', x5_module)
+    for origin in ['button_held', 'button_released', 'START']:
+        for module in range(1, 5):
+            for kind in ['disconnect', 'change', 'multiple']:
+                def loss_recovery(origin=origin, module=module, kind=kind):
+                    if origin == 'START':
+                        b.start(module)
+                    else:
+                        begin_button(module)
+                        if origin == 'button_released':
+                            release_button()
+                    b.feed(1, SHORT)
+                    b.finish()
+                    expected = frame('Short', 'OK', 'OK', module)
+                    invalidate(module, kind)
+                    b.finish(5000)
+                    expected += ERR
+                    assert b.output() == expected and b.lib.Host_State() == 0
+                    b.select_module(module)
+                    b.feed(1, D1)
+                    b.finish(4_000_000)
+                    assert b.output() == expected and b.output(1) == b'test\r\n'
+                    if origin == 'START':
+                        b.feed(2, f'(START,{module})')
+                        b.finish(3000)
+                    else:
+                        release_button()
+                        press_button()
+                    b.feed(1, SHORT)
+                    b.finish()
+                    assert b.output(1) == b'test\r\n' * 2
+                    assert b.output() == expected + frame('Short', 'OK', 'OK', module)
+                test(f'{origin} X{module} {kind}: one ERR, reconnect idle, fresh start recovers', loss_recovery)
 
     for active in [(), (1, 2), (1, 2, 3, 4)]:
         def invalid_inputs(active=active):
@@ -474,233 +544,23 @@ def main():
                 b.lib.Host_SetInput(channel, 1)
             b.feed(2, '(RD_NUM)')
             b.finish(5000)
-            assert b.output() == ERR and b.lib.Host_State() == 0
             b.feed(2, '(START,1)')
             b.finish(5000)
-            assert b.output() == ERR * 2 and b.output(1) == b''
-            b.lib.Host_SetInput(5, 1)
+            release_button()
+            press_button()
             b.finish(4_000_000)
             assert b.output() == ERR * 3 and b.output(1) == b''
-            # Fixing the module while X5 stays low must not create a new trigger.
             b.select_module(1)
             b.finish(5000)
             assert b.output() == ERR * 3 and b.output(1) == b''
-            b.lib.Host_SetInput(5, 0)
-            b.finish(100)
-            b.lib.Host_SetInput(5, 1)
-            b.finish(3000)
+            release_button()
+            press_button()
             b.feed(1, SHORT)
             b.finish()
             assert b.output() == ERR * 3 + frame('Short', 'OK', 'OK')
-        test(f'RD_NUM, START and X5 reject non-unique module inputs {active}; X5 recovery', invalid_inputs)
+        test(f'nonunique inputs {active}: RD_NUM, START, button ERR once; reconnect needs new press', invalid_inputs)
 
-    def query_during_session():
-        b.start(1)
-        b.feed(2, '(RD_NUM)OK')
-        b.finish(5000)
-        assert b.output() == query_result(1)
-        b.feed(1, SHORT)
-        b.finish()
-        expected = query_result(1) + frame('Short', 'OK', 'OK', 1)
-        assert b.output() == expected
-        b.select_module(0)
-        b.feed(2, '(RD_NUM)')
-        b.finish(5000)
-        b.lib.Host_SetInput(1, 1)
-        b.lib.Host_SetInput(2, 1)
-        b.feed(2, '(RD_NUM)')
-        b.finish(5000)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == expected + ERR * 3
-        assert b.output(1) == b'test\r\n'
-    test('healthy RD_NUM preserves session; disconnect faults independently and queries cannot resume it', query_during_session)
-
-    def query_during_json():
-        b.start(1)
-        b.feed(1, D1)
-        b.finish(200)
-        assert b.output() and not b.output().endswith(b'\r\n')
-        b.select_module(3)
-        b.feed(2, '(RD_NUM)')
-        b.finish()
-        expected = frame('D1-1', '2-5=12.6 V:NG') + ERR + query_result(3)
-        assert b.output() == expected
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == expected
-    test('RD_NUM waits for current JSON boundary and never interleaves bytes', query_during_json)
-
-    def x5_rearm():
-        b.select_module(2)
-        b.lib.Host_SetInput(5, 1)
-        b.finish(3000)
-        b.feed(1, SHORT + 'end\r\n')
-        b.finish()
-        b.lib.Host_SetInput(5, 0)
-        b.finish(100)
-        b.select_module(4)
-        b.lib.Host_SetInput(5, 1)
-        b.finish(3000)
-        b.feed(1, D1 + 'end\r\n')
-        b.finish()
-        assert b.output(1) == b'test\r\n' * 2
-        assert b.output() == frame('Short', 'OK', 'OK', 2) + frame('D1-1', '2-5=12.6 V:NG', module=4)
-    test('X5 high rearms; next low snapshots a new module', x5_rearm)
-
-    for phase in ['sending_test', 'waiting_first', 'sending_json', 'receiving', 'query_reply', 'error_reply']:
-        def busy_x5(phase=phase):
-            if phase in ['query_reply', 'error_reply']:
-                b.select_module(1)
-                b.feed(2, '(RD_NUM)' if phase == 'query_reply' else '(BAD)')
-                expected = query_result(1) if phase == 'query_reply' else ERR
-                assert b.output() and not b.output().endswith(b'\r\n')
-                b.lib.Host_SetInput(5, 1)
-                b.finish()
-                assert b.output() == expected and b.output(1) == b'test\r\n'
-                b.finish(5000)
-                assert b.output(1) == b'test\r\n'
-                b.feed(1, SHORT + 'end\r\n')
-                b.finish()
-                assert b.output() == expected + frame('Short', 'OK', 'OK')
-            else:
-                b.select_module(1)
-                if phase == 'sending_test':
-                    b.feed(2, '(START,1)')
-                    assert b.lib.Host_State() == 1
-                else:
-                    b.start(1)
-                expected = b''
-                if phase in ['sending_json', 'receiving']:
-                    b.feed(1, D1)
-                    b.finish(200 if phase == 'sending_json' else 10000)
-                    expected = frame('D1-1', '2-5=12.6 V:NG')
-                b.lib.Host_SetInput(5, 1)
-                b.finish(5000)
-                b.feed(1, SHORT + 'end\r\n')
-                b.finish()
-                assert b.output() == expected + frame('Short', 'OK', 'OK')
-                assert b.output(1) == b'test\r\n' * 2
-            b.lib.Host_SetInput(5, 0)
-            b.finish(100)
-            b.lib.Host_SetInput(5, 1)
-            b.finish(3000)
-            assert b.output(1) == b'test\r\n' * (2 if phase in ['query_reply', 'error_reply'] else 3)
-        behavior = 'idle trigger deferred once' if phase in ['query_reply', 'error_reply'] else 'new trigger replaces active session'
-        test('X5 during ' + phase + ': ' + behavior, busy_x5)
-
-    def x5_query_pulse_snapshot():
-        b.select_module(1)
-        b.feed(2, '(RD_NUM)')
-        b.lib.Host_SetInput(5, 1)
-        b.finish(100)
-        assert b.output(1) == b''
-        b.lib.Host_SetInput(5, 0)
-        b.select_module(4)
-        b.finish(5000)
-        assert b.output() == query_result(1) and b.output(1) == b''
-        b.lib.Host_SetInput(5, 1)
-        b.finish(3000)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == query_result(1) + frame('Short', 'OK', 'OK', 4)
-    test('X5 released during query cancels pending test silently; new low reads new MH', x5_query_pulse_snapshot)
-
-    def x5_invalid_snapshot():
-        b.feed(2, '(RD_NUM)')
-        b.lib.Host_SetInput(5, 1)
-        b.finish(100)
-        b.lib.Host_SetInput(5, 0)
-        b.select_module(1)
-        b.finish(10000)
-        assert b.output() == ERR * 2 and b.output(1) == b''
-    test('X5 without a module while idle reply is pending retains invalid snapshot and replies ERR', x5_invalid_snapshot)
-
-    def x5_pending_start_priority():
-        b.select_module(1)
-        b.feed(2, '(STA')
-        b.lib.Host_SetInput(5, 1)
-        b.finish(100)
-        b.lib.Host_SetInput(5, 0)
-        b.finish(100)
-        b.feed(2, 'RT,1)')
-        b.finish(5000)
-        b.feed(1, SHORT + 'end\r\n')
-        b.finish()
-        assert b.output(1) == b'test\r\n'
-        assert b.output() == frame('Short', 'OK', 'OK', 1)
-    test('complete START replaces deferred X5 request without double-starting', x5_pending_start_priority)
-
-    def x5_pending_command_error():
-        b.select_module(1)
-        b.feed(2, '(BA')
-        b.lib.Host_SetInput(5, 1)
-        b.finish(100)
-        b.feed(2, 'D)')
-        b.finish(10000)
-        assert b.output() == ERR and b.output(1) == b''
-    test('command error cancels deferred X5 request without a stale start after ERR', x5_pending_command_error)
-
-    def latch_once():
-        b.start(1)
-        b.select_module(4)
-        b.feed(1, SHORT + SHORT)
-        b.finish()
-        b.select_module(1)
-        b.finish()
-        assert b.output(1) == b'test\r\n'
-        assert b.output() == ERR
-        b.lib.Host_SetInput(5, 1)
-        b.finish(3000)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == ERR + frame('Short', 'OK', 'OK')
-    test('UART START detects module change; reconnect alone stays idle, valid X5 may restart', latch_once)
-
-    def discard_idle_data():
-        b.feed(1, 'X' * 900, spacing=0)
-        b.finish(10000)
-        b.feed(1, D1[:15])
-        b.start(2)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == frame('Short', 'OK', 'OK', 2)
-    test('START clears stale idle/overflowed board bytes and partial lines', discard_idle_data)
-
-    def x5_clears_stale():
-        b.feed(1, SHORT + D1[:15], spacing=0)
-        b.select_module(3)
-        b.lib.Host_SetInput(5, 1)
-        b.finish(3000)
-        b.feed(1, D1)
-        b.finish()
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG', module=3)
-    test('X5 clears pre-trigger board records and fragments', x5_clears_stale)
-
-    def invalid_restart():
-        b.start(1)
-        b.feed(1, D1)
-        b.finish(200)
-        b.feed(2, '(START,3)')
-        b.finish()
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR
-        assert b.output(1) == b'test\r\n' and b.lib.Host_State() == 0
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR
-    test('mismatched new START completes JSON then reports ERR and ends old session', invalid_restart)
-
-    def debug_batch():
-        b.start(1)
-        b.feed(1, (HERE / '串口测试数据/主板连续输入.txt').read_bytes())
-        b.finish()
-        # Git checkout may normalize fixture line endings; wire output must be CRLF.
-        lines = (HERE / '串口测试数据/上位机预期输出_模号1.jsonl').read_text(encoding='utf-8').splitlines()
-        assert b.output() == ''.join(line + '\r\n' for line in lines).encode('utf-8')
-        assert b.output(1) == b'test\r\n'
-    test('six-record serial debug file matches documented bytes', debug_batch)
-
-    def every_module_combination():
+    def all_combinations():
         for mask in range(16):
             b.reset()
             for channel in range(1, 5):
@@ -710,355 +570,272 @@ def main():
             module = {1: 1, 2: 2, 4: 3, 8: 4}.get(mask)
             assert b.output() == (query_result(module) if module else ERR)
             assert b.output(1) == b''
-    test('all 16 X1-X4 level combinations: only a unique low selects a module', every_module_combination)
+    test('all 16 input combinations: only one low valid', all_combinations)
 
-    def wait_for_bytes(port, length):
-        for _ in range(2000):
-            if len(b.output(port)) >= length:
-                return
-            b.finish(10)
-        raise AssertionError(f'UART{port} did not reach {length} bytes')
-
-    def begin_x5(module=1):
-        b.select_module(module)
+    def debounce_boundary():
+        b.select_module(1)
+        release_button()
         b.lib.Host_SetInput(5, 1)
-        b.finish(3000)
+        b.finish(19000)
+        assert b.output(1) == b''
+        b.finish(990)
+        assert b.output(1) == b''
+        b.finish(2010)
         assert b.output(1) == b'test\r\n'
+    test('press below 20 ms does not start; stable 20 ms confirms one event', debounce_boundary)
 
-    def invalidate_module(module, kind):
-        if kind == 'disconnect':
-            b.select_module(0)
-        elif kind == 'change':
-            b.select_module(module % 4 + 1)
-        else:
-            b.lib.Host_SetInput(module % 4 + 1, 1)
-
-    for module in range(1, 5):
-        for kind in ['disconnect', 'change', 'multiple']:
-            def held_loss(module=module, kind=kind):
-                begin_x5(module)
-                b.feed(1, SHORT)
-                b.finish()
-                invalidate_module(module, kind)
-                b.finish(5000)
-                expected = frame('Short', 'OK', 'OK', module) + ERR
-                assert b.output() == expected and b.lib.Host_State() == 0
-                b.finish(4_000_000)
-                b.select_module(module)
-                b.feed(1, SHORT)
-                b.finish()
-                assert b.output() == expected and b.output(1) == b'test\r\n'
-                b.lib.Host_SetInput(5, 0)
-                b.finish(100)
-                target = module % 4 + 1
-                b.select_module(target)
-                b.lib.Host_SetInput(5, 1)
-                b.finish(3000)
-                b.feed(1, SHORT)
-                b.finish()
-                assert b.output(1) == b'test\r\n' * 2
-                assert b.output() == expected + frame('Short', 'OK', 'OK', target)
-            test(f'X{module} held-low watch: {kind} -> one ERR, no reconnect start, rearm with new MH', held_loss)
-
-    for origin, level in [('X5', 'held_low'), ('START', 'released_high')]:
-        for module in range(1, 5):
-            def disconnect_start_recovery(module=module, origin=origin, level=level):
-                if origin == 'X5':
-                    begin_x5(module)
-                else:
-                    b.start(module)
-                b.feed(1, SHORT)
-                b.finish()
-                expected = frame('Short', 'OK', 'OK', module)
-                b.select_module(0)
-                b.finish(5000)
-                expected += ERR
-                assert b.output() == expected and b.lib.Host_State() == 0
-                # Reconnect and query must not start; a fresh matching START must.
-                b.select_module(module)
-                b.feed(1, SHORT)
-                b.finish()
-                assert b.output() == expected and b.output(1) == b'test\r\n'
-                b.feed(2, '(RD_NUM)')
-                b.finish(5000)
-                expected += query_result(module)
-                b.feed(1, D1[:15])
-                b.feed(2, f'(START,{module})')
-                b.finish(3000)
-                b.feed(1, SHORT)
-                b.finish()
-                expected += frame('Short', 'OK', 'OK', module)
-                assert b.output() == expected and b.output(1) == b'test\r\n' * 2
-                # The recovered session belongs to START, even if X5 was held low.
-                b.lib.Host_SetInput(5, 0)
-                b.finish(100)
-                b.feed(1, SHORT)
-                b.finish()
-                assert b.output() == expected + frame('Short', 'OK', 'OK', module)
-            test(f'{origin} X{module}, X5 {level}: reconnect/query idle; matching START recovers without X5', disconnect_start_recovery)
-
-    for level in ['held_low', 'released_high']:
-        for kind in ['disconnect', 'change', 'multiple']:
-            def watch_after_end(kind=kind, level=level):
-                begin_x5()
-                b.feed(1, SHORT + 'end\r\n')
-                b.finish()
-                assert b.lib.Host_State() == 0
-                if level == 'released_high':
-                    b.lib.Host_SetInput(5, 0)
-                    b.finish(100)
-                invalidate_module(1, kind)
-                b.finish(5000)
-                expected = frame('Short', 'OK', 'OK') + (ERR if level == 'held_low' else b'')
-                assert b.output() == expected
-                b.finish(4_000_000)
-                assert b.output() == expected
-            test('module watch after end, X5 ' + level + ': ' + kind, watch_after_end)
-
-
-    for module in range(1, 5):
-        def release_stops_then_start(module=module):
-            begin_x5(module)
-            b.feed(1, SHORT)
-            b.finish()
-            expected = frame('Short', 'OK', 'OK', module)
+    def press_bounce():
+        b.select_module(1)
+        release_button()
+        for _ in range(10):
+            b.lib.Host_SetInput(5, 1)
+            b.finish(3000)
             b.lib.Host_SetInput(5, 0)
-            b.finish(100)
-            b.feed(1, D1)
-            b.finish()
-            assert b.output() == expected and b.lib.Host_State() == 0
-            # Changing inputs after a normal release must not create an ERR.
-            target = module % 4 + 1
-            b.select_module(target)
-            b.feed(1, D1[:15])
-            b.feed(2, f'(START,{target})')
+            b.finish(2000)
+        assert b.output(1) == b''
+        press_button()
+        b.finish(4_000_000)
+        assert b.output(1) == b'test\r\n' and b.output() == b''
+    test('mechanical press bounce rejected, long hold sends one test only', press_bounce)
+
+    def release_bounce():
+        begin_button()
+        b.feed(1, SHORT + 'end\r\n')
+        b.finish()
+        for _ in range(10):
+            b.lib.Host_SetInput(5, 0)
+            b.finish(3000)
+            b.lib.Host_SetInput(5, 1)
+            b.finish(2000)
+        b.finish(30000)
+        assert b.output(1) == b'test\r\n'
+        release_button()
+        press_button()
+        assert b.output(1) == b'test\r\n' * 2
+    test('release bounce cannot rearm; stable release plus fresh press starts next round', release_bounce)
+
+    for wrap in [65530, 131066]:
+        def debounce_wrap(wrap=wrap):
+            b.select_module(2)
+            release_button()
+            b.lib.Host_SetMillis(wrap)
+            b.lib.Host_SetInput(5, 1)
+            b.finish(19000)
+            assert b.output(1) == b''
             b.finish(3000)
             b.feed(1, SHORT)
             b.finish()
-            assert b.output(1) == b'test\r\n' * 2
-            assert b.output() == expected + frame('Short', 'OK', 'OK', target)
-        test(f'X5 X{module}: release stops silently; valid START with X5 high resumes new MH', release_stops_then_start)
+            assert b.output(1) == b'test\r\n'
+            assert b.output() == frame('Short', 'OK', 'OK', 2)
+        test(f'20 ms debounce across 16-bit millisecond wrap near {wrap}', debounce_wrap)
 
-    def held_fault_during_json():
-        begin_x5()
-        b.feed(1, D1)
-        b.finish(200)
-        assert b.output() and not b.output().endswith(b'\r\n')
-        b.select_module(0)
-        b.finish(100)
+    def busy_press_end_before_debounce():
+        b.start(1)
+        release_button()
+        b.lib.Host_SetInput(5, 1)
+        b.finish(5000)
+        b.feed(1, SHORT + 'end\r\n')
+        b.finish(50000)
+        assert b.lib.Host_State() == 0
+        assert b.output(1) == b'test\r\n'
+        b.finish(4_000_000)
+        assert b.output(1) == b'test\r\n'
+        release_button()
+        press_button()
+        assert b.output(1) == b'test\r\n' * 2
+    test('busy press consumed even if end arrives during debounce; holding across end never restarts', busy_press_end_before_debounce)
+
+    for phase in ['sending_test', 'waiting_first', 'sending_json', 'receiving']:
+        def busy_press(phase=phase):
+            b.select_module(1)
+            release_button()
+            if phase == 'sending_test':
+                b.feed(2, '(START,1)', spacing=0)
+                wait_for_bytes(1, 1)
+            else:
+                b.start(1)
+            expected = b''
+            if phase in ['sending_json', 'receiving']:
+                b.feed(1, D1)
+                b.finish(200 if phase == 'sending_json' else 10000)
+                expected = frame('D1-1', '2-5=12.6 V:NG')
+            press_button()
+            release_button()
+            b.feed(1, SHORT + 'end\r\n')
+            b.finish()
+            assert b.output(1) == b'test\r\n'
+            assert b.output() == expected + frame('Short', 'OK', 'OK')
+            b.finish(50000)
+            assert b.output(1) == b'test\r\n'
+        test('button during ' + phase + ' ignored, no queued restart, old session intact', busy_press)
+
+    def held_after_end():
+        begin_button(4)
+        b.feed(1, SHORT + 'end\r\n')
+        b.finish(4_000_000)
+        assert b.output(1) == b'test\r\n'
+        release_button()
+        press_button()
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output(1) == b'test\r\n' * 2
+        assert b.output() == frame('Short', 'OK', 'OK', 4) * 2
+    test('button held across normal end never repeats; release and press begins next round', held_after_end)
+
+    def accepted_click_survives_release():
+        b.select_module(3)
+        release_button()
+        b.feed(2, '(RD_NUM')
+        press_button()
+        assert b.output(1) == b''
+        release_button()
+        b.feed(2, ')')
+        b.finish(5000)
+        assert b.output() == query_result(3)
+        assert b.output(1) == b'test\r\n'
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == query_result(3) + frame('Short', 'OK', 'OK', 3)
+    test('accepted idle press survives release and waits for partial query boundary', accepted_click_survives_release)
+
+    def pending_module_loss():
         b.select_module(1)
-        b.finish(10000)
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR
-        assert b.output(1) == b'test\r\n'
-    test('held X5 module loss during JSON completes old frame then ERR; reconnect does not restart', held_fault_during_json)
-
-    def fault_and_new_trigger_during_json():
-        begin_x5()
-        b.feed(1, D1)
-        b.finish(200)
+        release_button()
+        b.feed(2, '(RD_NUM')
+        press_button()
         b.select_module(0)
-        b.finish(100)
-        b.lib.Host_SetInput(5, 0)
-        b.finish(100)
+        b.finish(5000)
         b.select_module(2)
-        b.lib.Host_SetInput(5, 1)
-        b.finish(100)
-        # New test cannot start until both the old JSON and ERR have been sent.
-        wait_for_bytes(2, len(frame('D1-1', '2-5=12.6 V:NG')) + len(ERR))
+        release_button()
+        b.feed(2, ')')
+        b.finish(5000)
+        assert b.output() == ERR + query_result(2) and b.output(1) == b''
+        press_button()
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == ERR + query_result(2) + frame('Short', 'OK', 'OK', 2)
+    test('accepted button request cancelled if locked module changes before execution', pending_module_loss)
+
+    def start_priority():
+        b.select_module(2)
+        release_button()
+        b.feed(2, '(START,')
+        press_button()
+        release_button()
+        b.feed(2, '2)')
+        b.finish(5000)
+        b.feed(1, SHORT)
+        b.finish()
         assert b.output(1) == b'test\r\n'
+        assert b.output() == frame('Short', 'OK', 'OK', 2)
+    test('START takes precedence over accepted idle button, no duplicate command', start_priority)
+
+    def simultaneous_start_button():
+        b.select_module(1)
+        release_button()
+        b.lib.Host_SetInput(5, 1)
+        b.finish(20000)
+        b.feed(2, '(START,1)', spacing=0)
+        b.finish(5000)
+        release_button()
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output(1) == b'test\r\n'
+        assert b.output() == frame('Short', 'OK', 'OK')
+    test('START at button confirmation yields one test command and release keeps receiving', simultaneous_start_button)
+
+    def invalid_button_then_start():
+        release_button()
+        press_button()
+        assert b.output() == ERR
+        b.select_module(2)
+        b.feed(2, '(START,2)')
         b.finish(3000)
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR
-        assert b.output(1) == b'test\r\n' * 2
+        release_button()
         b.feed(1, SHORT)
         b.finish()
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR + frame('Short', 'OK', 'OK', 2)
-    test('JSON in flight: loss, release, new low -> full old JSON, ERR, new test and MH', fault_and_new_trigger_during_json)
+        assert b.output() == ERR + frame('Short', 'OK', 'OK', 2)
+    test('invalid button press never interlocks a later valid START', invalid_button_then_start)
 
-    def latest_trigger_during_json():
-        begin_x5()
-        b.feed(1, D1)
-        b.finish(200)
-        for module in [2, 3, 4]:
-            b.lib.Host_SetInput(5, 0)
-            b.finish(10)
-            b.select_module(module)
-            b.lib.Host_SetInput(5, 1)
-            b.finish(10)
-        b.finish(15000)
-        assert b.output(1) == b'test\r\n' * 2
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + frame('Short', 'OK', 'OK', 4)
-    test('rapid X5 re-triggers during JSON retain only latest module and do not mix old MH', latest_trigger_during_json)
-
-    def pending_trigger_invalidated():
-        begin_x5()
-        b.feed(1, D1)
-        b.finish(200)
-        b.lib.Host_SetInput(5, 0)
-        b.finish(10)
-        b.select_module(2)
+    def busy_error_press():
+        b.select_module(1)
+        release_button()
         b.lib.Host_SetInput(5, 1)
-        b.finish(10)
-        b.select_module(0)
-        b.finish(10)
-        b.select_module(2)
-        b.finish(15000)
+        b.feed(2, '(BAD)')
+        b.finish(50000)
+        assert b.output() == ERR and b.output(1) == b''
+        release_button()
+        press_button()
         assert b.output(1) == b'test\r\n'
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG') + ERR
-    test('held module loss cancels a deferred new test; reconnect cannot revive it', pending_trigger_invalidated)
-
-    def watch_during_query():
-        begin_x5()
-        b.feed(2, '(RD_NUM)')
-        assert b.output() and not b.output().endswith(b'\r\n')
-        b.select_module(0)
-        b.finish(10000)
-        assert b.output() == query_result(1) + ERR
-        assert b.output(1) == b'test\r\n'
-    test('X5 watch runs during RD_NUM reply; complete query JSON precedes disconnect ERR', watch_during_query)
+    test('press observed during error handling consumed, no delayed start after ERR', busy_error_press)
 
     for sent in range(1, 7):
-        def fault_mid_test(sent=sent):
+        def mid_test_fault(sent=sent):
             b.select_module(1)
+            release_button()
             b.lib.Host_SetInput(5, 1)
             wait_for_bytes(1, sent)
-            assert b.output(1) == b'test\r\n'[:sent]
             b.select_module(0)
             b.finish(5000)
-            assert b.output(1) == b'test\r\n'
-            assert b.output() == ERR and b.lib.Host_State() == 0
+            assert b.output(1) == b'test\r\n' and b.output() == ERR
+            b.select_module(2)
             b.feed(1, SHORT)
             b.finish()
             assert b.output() == ERR
-        test(f'X5 module fault after test byte {sent}: finish UART1 command, ERR, no old results', fault_mid_test)
+            release_button()
+            press_button()
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output(1) == b'test\r\n' * 2
+            assert b.output() == ERR + frame('Short', 'OK', 'OK', 2)
+        test(f'button test byte {sent}: module fault finishes command, new press recovers new MH', mid_test_fault)
 
-    def fault_before_test():
+    def before_test_fault():
         b.select_module(1)
+        release_button()
         b.lib.Host_SetInput(5, 1)
-        b.finish(10)
+        b.finish(20010)
         assert b.lib.Host_State() == 1 and b.output(1) == b''
         b.select_module(0)
         b.finish(5000)
         assert b.output() == ERR and b.output(1) == b''
-    test('module loss before first test byte cancels unsent command', fault_before_test)
+    test('module loss before first test byte cancels unsent button start', before_test_fault)
 
-    def fault_retrigger_mid_test():
-        b.select_module(1)
-        b.lib.Host_SetInput(5, 1)
-        wait_for_bytes(1, 2)
-        b.select_module(0)
-        b.finish(10)
-        b.lib.Host_SetInput(5, 0)
-        b.finish(10)
-        b.select_module(2)
-        b.lib.Host_SetInput(5, 1)
-        b.finish(10000)
-        assert b.output(1) == b'test\r\n' * 2 and b.output() == ERR
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == ERR + frame('Short', 'OK', 'OK', 2)
-    test('partial test plus disconnect/retrigger -> two complete commands, ERR before new MH', fault_retrigger_mid_test)
+    for response in ['json', 'query']:
+        def fault_during_output(response=response):
+            begin_button()
+            release_button()
+            if response == 'json':
+                b.feed(1, D1)
+                b.finish(200)
+                expected = frame('D1-1', '2-5=12.6 V:NG')
+            else:
+                b.feed(2, '(RD_NUM)')
+                expected = query_result(1)
+            assert b.output() and not b.output().endswith(b'\r\n')
+            b.select_module(0)
+            b.finish(100)
+            b.select_module(2)
+            b.feed(2, '(START,2)', spacing=0)
+            b.feed(1, SHORT + D1[:15], spacing=0)
+            b.finish(15000)
+            assert b.output() == expected + ERR
+            assert b.output(1) == b'test\r\n' * 2
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output() == expected + ERR + frame('Short', 'OK', 'OK', 2)
+        test('module loss during ' + response + ': full old frame, ERR, fresh START and clean MH', fault_during_output)
 
-    def simultaneous_start_x5():
-        b.select_module(3)
-        b.feed(2, '(START,3)', spacing=0)
-        b.lib.Host_SetInput(5, 1)
-        b.finish(5000)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output(1) == b'test\r\n'
-        assert b.output() == frame('Short', 'OK', 'OK', 3)
-    test('simultaneous matching START and X5 create only one test command', simultaneous_start_x5)
-
-    def invalid_x5_then_start():
-        begin_x5()
-        b.select_module(0)
-        b.finish(5000)
-        assert b.output() == ERR
-        b.lib.Host_SetInput(5, 0)
-        b.finish(100)
-        b.lib.Host_SetInput(5, 1)
-        b.finish(5000)
-        assert b.output() == ERR * 2 and b.output(1) == b'test\r\n'
-        b.select_module(2)
-        b.feed(2, '(START,2)')
-        b.finish(3000)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == ERR * 2 + frame('Short', 'OK', 'OK', 2)
-        assert b.output(1) == b'test\r\n' * 2
-        b.lib.Host_SetInput(5, 0)
-        b.finish(100)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == ERR * 2 + frame('Short', 'OK', 'OK', 2) * 2
-    test('invalid X5 does not lock START; matching command recovers and survives X5 release', invalid_x5_then_start)
-
-    def healthy_start_after_end():
+    def query_no_resume():
         b.start(1)
-        b.feed(1, SHORT + 'end\r\n')
-        b.finish()
-        b.feed(2, '(START,1)')
-        b.finish(3000)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output(1) == b'test\r\n' * 2
-        assert b.output() == frame('Short', 'OK', 'OK', 1) * 2
-    test('without module loss, START after end still works without X5', healthy_start_after_end)
-
-    def high_disconnect_during_json():
-        b.start(1)
-        b.feed(1, D1)
-        b.finish(200)
-        assert b.output() and not b.output().endswith(b'\r\n')
-        b.select_module(0)
-        b.finish(100)
-        b.select_module(2)
-        b.finish(15000)
-        expected = frame('D1-1', '2-5=12.6 V:NG') + ERR
-        assert b.output() == expected
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == expected and b.output(1) == b'test\r\n'
-        b.lib.Host_SetInput(5, 1)
-        b.finish(3000)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == expected + frame('Short', 'OK', 'OK', 2)
-    test('START with X5 high: JSON completes before module ERR; new X5 starts fresh', high_disconnect_during_json)
-
-    def high_disconnect_mid_test():
-        b.select_module(1)
-        b.feed(2, '(START,1)', spacing=0)
-        wait_for_bytes(1, 2)
-        assert b.output(1) == b'te'
-        b.select_module(0)
+        b.feed(2, '(RD_NUM)OK')
         b.finish(5000)
-        assert b.output(1) == b'test\r\n' and b.output() == ERR
-        b.select_module(2)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == ERR
-        b.feed(2, '(START,2)')
-        b.finish(3000)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output() == ERR + frame('Short', 'OK', 'OK', 2)
-        assert b.output(1) == b'test\r\n' * 2
-    test('UART START, X5 high: disconnect mid-test finishes command; fresh START recovers', high_disconnect_mid_test)
-
-    def high_disconnect_during_query():
-        b.start(1)
-        b.feed(2, '(RD_NUM)')
-        assert b.output() and not b.output().endswith(b'\r\n')
         b.select_module(0)
         b.finish(5000)
         b.select_module(3)
         b.feed(2, '(RD_NUM)')
         b.finish(5000)
         expected = query_result(1) + ERR + query_result(3)
-        assert b.output() == expected
         b.feed(1, SHORT)
         b.finish()
         assert b.output() == expected and b.output(1) == b'test\r\n'
@@ -1067,152 +844,57 @@ def main():
         b.feed(1, SHORT)
         b.finish()
         assert b.output() == expected + frame('Short', 'OK', 'OK', 3)
-    test('X5 high module loss during RD_NUM reply: full query, ERR and read-only re-query cannot resume', high_disconnect_during_query)
+    test('query and ACK preserve healthy session, query alone never restores disconnected session', query_no_resume)
 
-    for phase in ['before_test', 'partial_test', 'query', 'json', 'partial_record']:
-        def release_in_flight(phase=phase):
-            if phase in ['before_test', 'partial_test']:
-                b.select_module(1)
-                b.lib.Host_SetInput(5, 1)
-                if phase == 'before_test':
-                    b.finish(10)
-                    assert b.output(1) == b''
-                else:
-                    wait_for_bytes(1, 2)
-            else:
-                begin_x5()
-                if phase == 'query':
-                    b.feed(2, '(RD_NUM)')
-                elif phase == 'json':
-                    b.feed(1, D1)
-                    b.finish(200)
-                else:
-                    b.feed(1, D1[:15])
-            b.lib.Host_SetInput(5, 0)
-            b.finish(10000)
-            expected = query_result(1) if phase == 'query' else (frame('D1-1', '2-5=12.6 V:NG') if phase == 'json' else b'')
-            assert b.output() == expected
-            assert b.output(1) == (b'' if phase == 'before_test' else b'test\r\n')
-            assert b.lib.Host_State() == 0
-            b.feed(1, SHORT)
-            b.finish()
-            assert b.output() == expected
-            b.start(2)
-            b.feed(1, SHORT)
-            b.finish()
-            assert b.output() == expected + frame('Short', 'OK', 'OK', 2)
-        test('X5 release during ' + phase + ': complete begun frame, silent stop, START recovery', release_in_flight)
-
-    for module in range(1, 5):
-        def start_takes_ownership(module=module):
-            begin_x5(module)
-            b.feed(2, f'(START,{module})')
-            b.finish(3000)
-            b.lib.Host_SetInput(5, 0)
-            b.finish(100)
-            b.feed(1, SHORT)
-            b.finish()
-            assert b.output(1) == b'test\r\n' * 2
-            assert b.output() == frame('Short', 'OK', 'OK', module)
-        test(f'START takes X{module} ownership from X5; later release does not stop', start_takes_ownership)
-
-    def simultaneous_start_release():
-        b.select_module(3)
-        b.feed(2, '(START,3)', spacing=0)
-        b.lib.Host_SetInput(5, 1)
-        b.finish(5000)
-        b.lib.Host_SetInput(5, 0)
-        b.finish(100)
+    def stale_idle_data():
+        b.feed(1, 'X' * 900, spacing=0)
+        b.finish(10000)
+        b.feed(1, D1[:15])
+        begin_button(3)
         b.feed(1, SHORT)
         b.finish()
-        assert b.output(1) == b'test\r\n'
         assert b.output() == frame('Short', 'OK', 'OK', 3)
-    test('simultaneous START/X5 chooses START ownership, no duplicate and release harmless', simultaneous_start_release)
+    test('button start clears stale records, fragments and idle overflow', stale_idle_data)
 
-    def release_pending_during_json():
-        begin_x5()
-        b.feed(1, D1)
-        b.finish(200)
-        b.lib.Host_SetInput(5, 0)
-        b.finish(10)
-        b.select_module(2)
-        b.lib.Host_SetInput(5, 1)
-        b.finish(10)
-        b.lib.Host_SetInput(5, 0)
-        b.finish(15000)
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG')
-        assert b.output(1) == b'test\r\n' and b.lib.Host_State() == 0
-    test('X5 request released before JSON completes is cancelled without stale test or ERR', release_pending_during_json)
+    def debug_batch():
+        b.start(1)
+        b.feed(1, (HERE / '串口测试数据/主板连续输入.txt').read_bytes())
+        b.finish()
+        lines = (HERE / '串口测试数据/上位机预期输出_模号1.jsonl').read_text(encoding='utf-8').splitlines()
+        assert b.output() == ''.join(line + '\r\n' for line in lines).encode('utf-8')
+        assert b.output(1) == b'test\r\n'
+    test('six-record serial debug file matches documented bytes', debug_batch)
 
-    def valid_restart_during_json():
-        b.start(4)
+    def high_must_arm_first():
+        b.select_module(1)
+        b.finish(10000)
+        press_button()
+        assert b.output(1) == b'' and b.output() == b''
+        release_button()
+        press_button()
+        assert b.output(1) == b'test\r\n'
+    test('startup high shorter than debounce cannot arm a press; stable release required', high_must_arm_first)
+
+    def end_releases_module_watch():
+        begin_button(1)
+        release_button()
+        b.feed(1, SHORT + 'end\r\n')
+        b.finish()
+        b.select_module(0)
+        b.finish(5000)
+        b.select_module(4)
         b.feed(1, D1)
-        b.finish(200)
-        b.feed(2, '(START,4)', spacing=0)
-        b.finish(15000)
+        b.finish()
+        assert b.output() == frame('Short', 'OK', 'OK')
+        press_button()
         b.feed(1, SHORT)
         b.finish()
+        assert b.output() == frame('Short', 'OK', 'OK') + frame('Short', 'OK', 'OK', 4)
         assert b.output(1) == b'test\r\n' * 2
-        assert b.output() == frame('D1-1', '2-5=12.6 V:NG', module=4) + frame('Short', 'OK', 'OK', 4)
-    test('matching START with X5 high waits for full JSON then starts a fresh round', valid_restart_during_json)
-
-    for module in range(1, 5):
-        for kind in ['disconnect', 'change', 'multiple']:
-            def start_loss_recovery(module=module, kind=kind):
-                b.start(module)
-                invalidate_module(module, kind)
-                b.finish(5000)
-                assert b.output() == ERR and b.lib.Host_State() == 0
-                b.select_module(module)
-                b.feed(1, SHORT)
-                b.finish()
-                assert b.output() == ERR
-                b.feed(2, f'(START,{module})')
-                b.finish(3000)
-                b.feed(1, SHORT)
-                b.finish()
-                assert b.output(1) == b'test\r\n' * 2
-                assert b.output() == ERR + frame('Short', 'OK', 'OK', module)
-            test(f'START X{module}, {kind}: one ERR; matching START restarts with X5 high', start_loss_recovery)
-
-    for sent in range(1, 7):
-        def release_at_test_byte(sent=sent):
-            b.select_module(1)
-            b.lib.Host_SetInput(5, 1)
-            wait_for_bytes(1, sent)
-            b.lib.Host_SetInput(5, 0)
-            b.feed(2, '(START,1)', spacing=0)
-            b.finish(10000)
-            assert b.output(1) == b'test\r\n' * 2 and b.output() == b''
-            b.feed(1, SHORT)
-            b.finish()
-            assert b.output() == frame('Short', 'OK', 'OK')
-        test(f'X5 release after test byte {sent}, queued START -> two complete commands, no ERR', release_at_test_byte)
-
-    for event in ['release', 'module_fault']:
-        def new_start_during_old_json(event=event):
-            begin_x5()
-            b.feed(1, D1)
-            b.finish(200)
-            if event == 'release':
-                b.lib.Host_SetInput(5, 0)
-            else:
-                b.select_module(0)
-            b.finish(100)
-            b.select_module(2)
-            b.feed(2, '(START,2)', spacing=0)
-            b.feed(1, SHORT + D1[:15], spacing=0)
-            b.finish(15000)
-            expected = frame('D1-1', '2-5=12.6 V:NG') + (ERR if event == 'module_fault' else b'')
-            assert b.output() == expected
-            assert b.output(1) == b'test\r\n' * 2
-            b.feed(1, SHORT)
-            b.finish()
-            assert b.output() == expected + frame('Short', 'OK', 'OK', 2)
-        test('JSON in flight, ' + event + ', queued START -> full old frame, optional ERR, clean new MH', new_start_during_old_json)
+    test('normal end returns idle; old module changes silent, new press reads new MH', end_releases_module_watch)
 
     LOG.append(f'ALL PASS: {passed} cases. Same C firmware core and RX-ring implementation; simulated UART/time only.')
-    LOG.append('NOT VALIDATED: real MCU timing, internal RC drift, physical serial wiring, actual 828C application acceptance.')
+    LOG.append('NOT VALIDATED: real MCU timing, Timer0 ISR timing, internal RC drift, physical button/serial wiring, actual 828C application acceptance.')
     print(LOG[-2])
 
 

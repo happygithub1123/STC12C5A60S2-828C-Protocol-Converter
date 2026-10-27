@@ -10,6 +10,7 @@
 #define PROJECT_NAME_MAX  31u
 #define PROJECT_UNIT_MAX  8u
 #define COMMAND_MAX       23u
+#define X5_DEBOUNCE_MS    20u
 #if UART1_RX_CAPACITY <= (INPUT_LINE_MAX + 2)
 #error UART1_ring_must_hold_a_complete_line
 #endif

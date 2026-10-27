@@ -2,6 +2,7 @@
 #include "Uart1.h"
 #include "Uart2.h"
 #include "input_control.h"
+#include "System.h"
 
 /*==============================================================================
  内部定义
@@ -28,19 +29,16 @@ static uint8 g_module_id, g_start_pos, g_command_len, g_command_discard;
 static uint8 g_error_pending, g_tx_kind, g_tx_phase, g_tx_index, g_tx_escape;
 static uint8 g_pending_byte, g_byte_pending, g_tx_finished;
 static uint16 g_line_scan;
-static uint8 g_x5_active, g_fixture_module;
-static uint8 g_start_source, g_rx_discard_pending; // 启动来源及当前输出结束后的接收清理
-static uint8 g_x5_request;                         // 0：无请求；1～4：最新一次触发时的模号
-static uint8 g_start_busy;                         // 独立于会话状态，确保已开始的 test 指令完整发送
+static uint8 g_fixture_module, g_rx_discard_pending;
+static uint8 g_x5_raw, g_x5_stable, g_x5_blocked; // 候选电平、确认电平、忙时按下锁存
+static uint16 g_x5_since;
+static uint8 g_x5_request; // 0：无请求；1～4：空闲时已确认按下的模号
+static uint8 g_start_busy; // 独立于会话状态，确保已开始的 test 指令完整发送
 static const char CODE *g_reply;
 
-#define START_NONE    0u
-#define START_COMMAND 1u
-#define START_X5      2u
-
-#define TX_NONE       0u
-#define TX_JSON       1u
-#define TX_LITERAL    2u
+#define TX_NONE    0u
+#define TX_JSON    1u
+#define TX_LITERAL 2u
 
 static const char CODE g_ok_text[]  = "OK";
 static const char CODE g_ng_text[]  = "NG";
@@ -714,7 +712,6 @@ static void AppComm_PollTx(void)
  */
 static void AppComm_StopSession(void)
 {
-    g_start_source       = START_NONE;
     g_fixture_module     = 0u;
     g_x5_request         = 0u;
     g_rx_discard_pending = 1u;
@@ -741,58 +738,67 @@ static void AppComm_SetError(uint8 reason)
 }
 
 /**
- * @brief  按启动来源处理 X5 释放，并持续核对锁定模号
+ * @brief  持续核对模号，并在空闲时接收一次消抖后的按键下降沿
  * @param  无
  * @retval 当前输入快照中的唯一模号；0 表示无效
  */
 static uint8 AppComm_PollInputs(void)
 {
-    uint8 inputs, module;
+    uint8 inputs, module, low;
+    uint16 now;
     inputs = InputControl_ReadActive();
     module = InputControl_GetModule(inputs);
-    if (!(inputs & 0x10u))
-    {
-        g_x5_active  = 0u;
-        g_x5_request = 0u; // 释放后不能再执行此前尚未下发的 X5 启动
-        if (g_start_source == START_X5)
-        {
-            AppComm_StopSession(); // 正常释放不报错，START 来源不受 X5 影响
-        }
-    }
-    else if (!g_x5_active)
-    {
-        g_x5_active = 1u;
-        if (module)
-        {
-            AppComm_StopSession();
-            g_x5_request = module; // 输出忙时仅保留最新一次、仍处于低电平的触发
-        }
-        else
-        {
-            AppComm_SetError(APP_ERROR_MODULE);
-        }
-        return module;
-    }
+    low    = (uint8)((inputs & 0x10u) != 0u);
+    now    = Sys_Millis();
     if ((g_x5_request && module != g_x5_request) ||
         (g_fixture_module && module != g_fixture_module))
     {
-        AppComm_SetError(APP_ERROR_MODULE); // 停止后清除监测；接回输入不自动恢复
+        AppComm_SetError(APP_ERROR_MODULE); // 接回模号不自动恢复
+    }
+    if (low && (app_state != APP_IDLE || g_start_busy || g_error_pending ||
+                g_x5_request || (g_tx_kind == TX_LITERAL && g_reply == g_err_text)))
+    {
+        // 忙时已经按下，即使稍后结束测试，也不能补发这次启动。
+        g_x5_blocked = 1u;
+    }
+    if (low != g_x5_raw)
+    {
+        g_x5_raw   = low;
+        g_x5_since = now;
+    }
+    if (g_x5_stable != g_x5_raw &&
+        (uint16)(now - g_x5_since) >= X5_DEBOUNCE_MS)
+    {
+        g_x5_stable = g_x5_raw;
+        if (!g_x5_stable)
+        {
+            g_x5_blocked = 0u; // 确认松开后，才允许下一次按下
+        }
+        else if (!g_x5_blocked)
+        {
+            if (module)
+            {
+                g_x5_request = module; // 松开不取消已经接受的按键事件
+            }
+            else
+            {
+                AppComm_SetError(APP_ERROR_MODULE);
+            }
+        }
     }
     return module;
 }
 
 /**
- * @brief  锁定已核对的模号和启动来源，准备下发 test
+ * @brief  锁定已核对的模号并准备下发 test
  * @param  id 模号，范围为 1～4
- * @param  source START_COMMAND 或 START_X5
  * @retval 无
  */
-static void AppComm_StartSession(uint8 id, uint8 source)
+static void AppComm_StartSession(uint8 id)
 {
     g_module_id          = id;
     g_fixture_module     = id;
-    g_start_source       = source;
-    g_x5_request         = 0u; // START 与 X5 同时到达时只执行一次启动
+    g_x5_request         = 0u; // START 优先，不重复执行已接受的按键事件
     g_rx_discard_pending = 0u;
     Uart1_ClearRx();
     g_line_scan    = 0u;
@@ -873,7 +879,7 @@ static void AppComm_ExecuteCommand(uint8 module)
     {
         if (module && module == g_command[7] - '0')
         {
-            AppComm_StartSession(module, START_COMMAND);
+            AppComm_StartSession(module);
         }
         else
         {
@@ -992,7 +998,8 @@ static void AppComm_PollBoard(void)
                     return;
                 }
                 Uart1_ClearRx();
-                app_state = APP_IDLE;
+                g_fixture_module = 0u; // 正常结束后等待下一次启动，不继续监测旧模号
+                app_state        = APP_IDLE;
             }
             else if (AppComm_ParseRecord(g_line_scan))
             {
@@ -1057,9 +1064,9 @@ void AppComm_Init(void)
     g_error_pending = g_tx_kind = g_tx_phase = g_tx_index = g_tx_escape = 0u;
     g_byte_pending = g_tx_finished = 0u;
     g_line_scan                    = 0u;
-    g_x5_active                    = 0u; // 上电已为低的 X5 在首次轮询时也检测一次
+    g_x5_raw = g_x5_stable = g_x5_blocked = 1u; // 上电必须先确认松开，不把已按住当作下降沿
+    g_x5_since                            = Sys_Millis();
     g_fixture_module = g_x5_request = g_start_busy = 0u;
-    g_start_source                                 = START_NONE;
     g_rx_discard_pending                           = 0u;
     Uart1_ClearRx();
     Uart2_ClearRx();
@@ -1120,10 +1127,10 @@ void AppComm_Poll(void)
     }
     if (g_x5_request && !g_command_len && !g_command_discard)
     {
-        // 执行时再次使用本轮快照核对，释放或模号变化的请求不能启动。
-        if (g_x5_active && module == g_x5_request)
+        // 执行时核对锁定模号；按键已经松开也执行这次有效启动。
+        if (module == g_x5_request)
         {
-            AppComm_StartSession(module, START_X5);
+            AppComm_StartSession(module);
         }
         else
         {

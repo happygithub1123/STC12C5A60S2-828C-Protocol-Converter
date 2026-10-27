@@ -78,6 +78,16 @@ void Sys_Init(void)
 }
 
 /**
+ * @brief  提供与固件接口相同的 16 位模拟毫秒计数
+ * @param  无
+ * @retval 当前模拟毫秒，65536 后回绕
+ */
+uint16 Sys_Millis(void)
+{
+    return (uint16)(now_us / 1000u);
+}
+
+/**
  * @brief  复位测试模型和固件会话
  * @param  无
  * @retval 无
