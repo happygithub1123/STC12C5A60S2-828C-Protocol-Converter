@@ -598,13 +598,13 @@ def main():
         b.lib.Host_SetInput(5, 0)
         b.select_module(4)
         b.finish(5000)
-        assert b.output() == query_result(1) + ERR and b.output(1) == b''
+        assert b.output() == query_result(1) and b.output(1) == b''
         b.lib.Host_SetInput(5, 1)
         b.finish(3000)
         b.feed(1, SHORT)
         b.finish()
-        assert b.output() == query_result(1) + ERR + frame('Short', 'OK', 'OK', 4)
-    test('module change after an X5 pulse cancels pending test, even after release; new edge restores new MH', x5_query_pulse_snapshot)
+        assert b.output() == query_result(1) + frame('Short', 'OK', 'OK', 4)
+    test('X5 released during query cancels pending test silently; new low reads new MH', x5_query_pulse_snapshot)
 
     def x5_invalid_snapshot():
         b.feed(2, '(RD_NUM)')
@@ -655,7 +655,7 @@ def main():
         b.feed(1, SHORT)
         b.finish()
         assert b.output() == ERR + frame('Short', 'OK', 'OK')
-    test('UART START session also detects module change and requires a new X5 edge to recover', latch_once)
+    test('UART START detects module change; reconnect alone stays idle, valid X5 may restart', latch_once)
 
     def discard_idle_data():
         b.feed(1, 'X' * 900, spacing=0)
@@ -760,9 +760,9 @@ def main():
                 assert b.output() == expected + frame('Short', 'OK', 'OK', target)
             test(f'X{module} held-low watch: {kind} -> one ERR, no reconnect start, rearm with new MH', held_loss)
 
-    for origin, level in [('X5', 'held_low'), ('X5', 'released_high'), ('START', 'released_high')]:
+    for origin, level in [('X5', 'held_low'), ('START', 'released_high')]:
         for module in range(1, 5):
-            def disconnect_requires_new_x5(module=module, origin=origin, level=level):
+            def disconnect_start_recovery(module=module, origin=origin, level=level):
                 if origin == 'X5':
                     begin_x5(module)
                 else:
@@ -770,39 +770,32 @@ def main():
                 b.feed(1, SHORT)
                 b.finish()
                 expected = frame('Short', 'OK', 'OK', module)
-                if level == 'released_high':
-                    b.lib.Host_SetInput(5, 0)
-                    b.finish(100)
                 b.select_module(0)
                 b.finish(5000)
                 expected += ERR
                 assert b.output() == expected and b.lib.Host_State() == 0
-                target = module % 4 + 1
-                b.select_module(target)
+                # Reconnect and query must not start; a fresh matching START must.
+                b.select_module(module)
                 b.feed(1, SHORT)
                 b.finish()
                 assert b.output() == expected and b.output(1) == b'test\r\n'
+                b.feed(2, '(RD_NUM)')
+                b.finish(5000)
+                expected += query_result(module)
+                b.feed(1, D1[:15])
+                b.feed(2, f'(START,{module})')
+                b.finish(3000)
+                b.feed(1, SHORT)
+                b.finish()
+                expected += frame('Short', 'OK', 'OK', module)
+                assert b.output() == expected and b.output(1) == b'test\r\n' * 2
+                # The recovered session belongs to START, even if X5 was held low.
                 b.lib.Host_SetInput(5, 0)
                 b.finish(100)
                 b.feed(1, SHORT)
                 b.finish()
-                assert b.output() == expected
-                b.feed(2, '(RD_NUM)')
-                b.finish(5000)
-                expected += query_result(target)
-                assert b.output() == expected
-                b.feed(2, f'(START,{target})')
-                b.finish(5000)
-                expected += ERR
-                assert b.output() == expected and b.output(1) == b'test\r\n'
-                b.feed(1, D1[:15])
-                b.lib.Host_SetInput(5, 1)
-                b.finish(3000)
-                b.feed(1, SHORT)
-                b.finish()
-                assert b.output(1) == b'test\r\n' * 2
-                assert b.output() == expected + frame('Short', 'OK', 'OK', target)
-            test(f'{origin} X{module}, X5 {level}: disconnect requires new edge; reconnect, RD_NUM and START blocked', disconnect_requires_new_x5)
+                assert b.output() == expected + frame('Short', 'OK', 'OK', module)
+            test(f'{origin} X{module}, X5 {level}: reconnect/query idle; matching START recovers without X5', disconnect_start_recovery)
 
     for level in ['held_low', 'released_high']:
         for kind in ['disconnect', 'change', 'multiple']:
@@ -816,34 +809,35 @@ def main():
                     b.finish(100)
                 invalidate_module(1, kind)
                 b.finish(5000)
-                assert b.output() == frame('Short', 'OK', 'OK') + ERR
+                expected = frame('Short', 'OK', 'OK') + (ERR if level == 'held_low' else b'')
+                assert b.output() == expected
                 b.finish(4_000_000)
-                assert b.output() == frame('Short', 'OK', 'OK') + ERR
+                assert b.output() == expected
             test('module watch after end, X5 ' + level + ': ' + kind, watch_after_end)
 
 
-    def release_continue_retrigger():
-        begin_x5()
-        b.feed(1, SHORT)
-        b.finish()
-        b.lib.Host_SetInput(5, 0)
-        b.finish(100)
-        b.feed(1, D1)
-        b.finish()
-        expected = frame('Short', 'OK', 'OK') + frame('D1-1', '2-5=12.6 V:NG')
-        assert b.output() == expected
-        b.select_module(2)
-        b.finish(5000)
-        expected += ERR
-        assert b.output() == expected
-        b.feed(1, D1[:15])
-        b.lib.Host_SetInput(5, 1)
-        b.finish(3000)
-        b.feed(1, SHORT)
-        b.finish()
-        assert b.output(1) == b'test\r\n' * 2
-        assert b.output() == expected + frame('Short', 'OK', 'OK', 2)
-    test('X5 release alone keeps healthy session; module change while high faults until new low', release_continue_retrigger)
+    for module in range(1, 5):
+        def release_stops_then_start(module=module):
+            begin_x5(module)
+            b.feed(1, SHORT)
+            b.finish()
+            expected = frame('Short', 'OK', 'OK', module)
+            b.lib.Host_SetInput(5, 0)
+            b.finish(100)
+            b.feed(1, D1)
+            b.finish()
+            assert b.output() == expected and b.lib.Host_State() == 0
+            # Changing inputs after a normal release must not create an ERR.
+            target = module % 4 + 1
+            b.select_module(target)
+            b.feed(1, D1[:15])
+            b.feed(2, f'(START,{target})')
+            b.finish(3000)
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output(1) == b'test\r\n' * 2
+            assert b.output() == expected + frame('Short', 'OK', 'OK', target)
+        test(f'X5 X{module}: release stops silently; valid START with X5 high resumes new MH', release_stops_then_start)
 
     def held_fault_during_json():
         begin_x5()
@@ -977,7 +971,7 @@ def main():
         assert b.output() == frame('Short', 'OK', 'OK', 3)
     test('simultaneous matching START and X5 create only one test command', simultaneous_start_x5)
 
-    def invalid_x5_cannot_unlock():
+    def invalid_x5_then_start():
         begin_x5()
         b.select_module(0)
         b.finish(5000)
@@ -989,16 +983,17 @@ def main():
         assert b.output() == ERR * 2 and b.output(1) == b'test\r\n'
         b.select_module(2)
         b.feed(2, '(START,2)')
-        b.finish(5000)
-        assert b.output() == ERR * 3 and b.output(1) == b'test\r\n'
-        b.lib.Host_SetInput(5, 0)
-        b.finish(100)
-        b.lib.Host_SetInput(5, 1)
         b.finish(3000)
         b.feed(1, SHORT)
         b.finish()
-        assert b.output() == ERR * 3 + frame('Short', 'OK', 'OK', 2)
-    test('invalid X5 pulse cannot unlock disconnect; only a fresh valid pulse restores correct module', invalid_x5_cannot_unlock)
+        assert b.output() == ERR * 2 + frame('Short', 'OK', 'OK', 2)
+        assert b.output(1) == b'test\r\n' * 2
+        b.lib.Host_SetInput(5, 0)
+        b.finish(100)
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output() == ERR * 2 + frame('Short', 'OK', 'OK', 2) * 2
+    test('invalid X5 does not lock START; matching command recovers and survives X5 release', invalid_x5_then_start)
 
     def healthy_start_after_end():
         b.start(1)
@@ -1013,9 +1008,7 @@ def main():
     test('without module loss, START after end still works without X5', healthy_start_after_end)
 
     def high_disconnect_during_json():
-        begin_x5()
-        b.lib.Host_SetInput(5, 0)
-        b.finish(100)
+        b.start(1)
         b.feed(1, D1)
         b.finish(200)
         assert b.output() and not b.output().endswith(b'\r\n')
@@ -1033,7 +1026,7 @@ def main():
         b.feed(1, SHORT)
         b.finish()
         assert b.output() == expected + frame('Short', 'OK', 'OK', 2)
-    test('X5 high disconnect during JSON: complete old frame, one ERR, drop old data until new edge', high_disconnect_during_json)
+    test('START with X5 high: JSON completes before module ERR; new X5 starts fresh', high_disconnect_during_json)
 
     def high_disconnect_mid_test():
         b.select_module(1)
@@ -1047,13 +1040,13 @@ def main():
         b.feed(1, SHORT)
         b.finish()
         assert b.output() == ERR
-        b.lib.Host_SetInput(5, 1)
+        b.feed(2, '(START,2)')
         b.finish(3000)
         b.feed(1, SHORT)
         b.finish()
         assert b.output() == ERR + frame('Short', 'OK', 'OK', 2)
         assert b.output(1) == b'test\r\n' * 2
-    test('UART START, X5 high: disconnect mid-test finishes command and gates results until X5', high_disconnect_mid_test)
+    test('UART START, X5 high: disconnect mid-test finishes command; fresh START recovers', high_disconnect_mid_test)
 
     def high_disconnect_during_query():
         b.start(1)
@@ -1069,12 +1062,154 @@ def main():
         b.feed(1, SHORT)
         b.finish()
         assert b.output() == expected and b.output(1) == b'test\r\n'
-        b.lib.Host_SetInput(5, 1)
+        b.feed(2, '(START,3)')
         b.finish(3000)
         b.feed(1, SHORT)
         b.finish()
         assert b.output() == expected + frame('Short', 'OK', 'OK', 3)
     test('X5 high module loss during RD_NUM reply: full query, ERR and read-only re-query cannot resume', high_disconnect_during_query)
+
+    for phase in ['before_test', 'partial_test', 'query', 'json', 'partial_record']:
+        def release_in_flight(phase=phase):
+            if phase in ['before_test', 'partial_test']:
+                b.select_module(1)
+                b.lib.Host_SetInput(5, 1)
+                if phase == 'before_test':
+                    b.finish(10)
+                    assert b.output(1) == b''
+                else:
+                    wait_for_bytes(1, 2)
+            else:
+                begin_x5()
+                if phase == 'query':
+                    b.feed(2, '(RD_NUM)')
+                elif phase == 'json':
+                    b.feed(1, D1)
+                    b.finish(200)
+                else:
+                    b.feed(1, D1[:15])
+            b.lib.Host_SetInput(5, 0)
+            b.finish(10000)
+            expected = query_result(1) if phase == 'query' else (frame('D1-1', '2-5=12.6 V:NG') if phase == 'json' else b'')
+            assert b.output() == expected
+            assert b.output(1) == (b'' if phase == 'before_test' else b'test\r\n')
+            assert b.lib.Host_State() == 0
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output() == expected
+            b.start(2)
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output() == expected + frame('Short', 'OK', 'OK', 2)
+        test('X5 release during ' + phase + ': complete begun frame, silent stop, START recovery', release_in_flight)
+
+    for module in range(1, 5):
+        def start_takes_ownership(module=module):
+            begin_x5(module)
+            b.feed(2, f'(START,{module})')
+            b.finish(3000)
+            b.lib.Host_SetInput(5, 0)
+            b.finish(100)
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output(1) == b'test\r\n' * 2
+            assert b.output() == frame('Short', 'OK', 'OK', module)
+        test(f'START takes X{module} ownership from X5; later release does not stop', start_takes_ownership)
+
+    def simultaneous_start_release():
+        b.select_module(3)
+        b.feed(2, '(START,3)', spacing=0)
+        b.lib.Host_SetInput(5, 1)
+        b.finish(5000)
+        b.lib.Host_SetInput(5, 0)
+        b.finish(100)
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output(1) == b'test\r\n'
+        assert b.output() == frame('Short', 'OK', 'OK', 3)
+    test('simultaneous START/X5 chooses START ownership, no duplicate and release harmless', simultaneous_start_release)
+
+    def release_pending_during_json():
+        begin_x5()
+        b.feed(1, D1)
+        b.finish(200)
+        b.lib.Host_SetInput(5, 0)
+        b.finish(10)
+        b.select_module(2)
+        b.lib.Host_SetInput(5, 1)
+        b.finish(10)
+        b.lib.Host_SetInput(5, 0)
+        b.finish(15000)
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG')
+        assert b.output(1) == b'test\r\n' and b.lib.Host_State() == 0
+    test('X5 request released before JSON completes is cancelled without stale test or ERR', release_pending_during_json)
+
+    def valid_restart_during_json():
+        b.start(4)
+        b.feed(1, D1)
+        b.finish(200)
+        b.feed(2, '(START,4)', spacing=0)
+        b.finish(15000)
+        b.feed(1, SHORT)
+        b.finish()
+        assert b.output(1) == b'test\r\n' * 2
+        assert b.output() == frame('D1-1', '2-5=12.6 V:NG', module=4) + frame('Short', 'OK', 'OK', 4)
+    test('matching START with X5 high waits for full JSON then starts a fresh round', valid_restart_during_json)
+
+    for module in range(1, 5):
+        for kind in ['disconnect', 'change', 'multiple']:
+            def start_loss_recovery(module=module, kind=kind):
+                b.start(module)
+                invalidate_module(module, kind)
+                b.finish(5000)
+                assert b.output() == ERR and b.lib.Host_State() == 0
+                b.select_module(module)
+                b.feed(1, SHORT)
+                b.finish()
+                assert b.output() == ERR
+                b.feed(2, f'(START,{module})')
+                b.finish(3000)
+                b.feed(1, SHORT)
+                b.finish()
+                assert b.output(1) == b'test\r\n' * 2
+                assert b.output() == ERR + frame('Short', 'OK', 'OK', module)
+            test(f'START X{module}, {kind}: one ERR; matching START restarts with X5 high', start_loss_recovery)
+
+    for sent in range(1, 7):
+        def release_at_test_byte(sent=sent):
+            b.select_module(1)
+            b.lib.Host_SetInput(5, 1)
+            wait_for_bytes(1, sent)
+            b.lib.Host_SetInput(5, 0)
+            b.feed(2, '(START,1)', spacing=0)
+            b.finish(10000)
+            assert b.output(1) == b'test\r\n' * 2 and b.output() == b''
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output() == frame('Short', 'OK', 'OK')
+        test(f'X5 release after test byte {sent}, queued START -> two complete commands, no ERR', release_at_test_byte)
+
+    for event in ['release', 'module_fault']:
+        def new_start_during_old_json(event=event):
+            begin_x5()
+            b.feed(1, D1)
+            b.finish(200)
+            if event == 'release':
+                b.lib.Host_SetInput(5, 0)
+            else:
+                b.select_module(0)
+            b.finish(100)
+            b.select_module(2)
+            b.feed(2, '(START,2)', spacing=0)
+            b.feed(1, SHORT + D1[:15], spacing=0)
+            b.finish(15000)
+            expected = frame('D1-1', '2-5=12.6 V:NG') + (ERR if event == 'module_fault' else b'')
+            assert b.output() == expected
+            assert b.output(1) == b'test\r\n' * 2
+            b.feed(1, SHORT)
+            b.finish()
+            assert b.output() == expected + frame('Short', 'OK', 'OK', 2)
+        test('JSON in flight, ' + event + ', queued START -> full old frame, optional ERR, clean new MH', new_start_during_old_json)
 
     LOG.append(f'ALL PASS: {passed} cases. Same C firmware core and RX-ring implementation; simulated UART/time only.')
     LOG.append('NOT VALIDATED: real MCU timing, internal RC drift, physical serial wiring, actual 828C application acceptance.')

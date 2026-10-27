@@ -29,14 +29,18 @@ static uint8 g_error_pending, g_tx_kind, g_tx_phase, g_tx_index, g_tx_escape;
 static uint8 g_pending_byte, g_byte_pending, g_tx_finished;
 static uint16 g_line_scan;
 static uint8 g_x5_active, g_fixture_module;
-static uint8 g_x5_retrigger_required; // 模号失效后，仅新的有效 X5 触发可解除锁定
-static uint8 g_x5_request;            // 0：无请求；1～4：最新一次触发时的模号
-static uint8 g_start_busy;            // 独立于会话状态，确保已开始的 test 指令完整发送
+static uint8 g_start_source, g_rx_discard_pending; // 启动来源及当前输出结束后的接收清理
+static uint8 g_x5_request;                         // 0：无请求；1～4：最新一次触发时的模号
+static uint8 g_start_busy;                         // 独立于会话状态，确保已开始的 test 指令完整发送
 static const char CODE *g_reply;
 
-#define TX_NONE    0u
-#define TX_JSON    1u
-#define TX_LITERAL 2u
+#define START_NONE    0u
+#define START_COMMAND 1u
+#define START_X5      2u
+
+#define TX_NONE       0u
+#define TX_JSON       1u
+#define TX_LITERAL    2u
 
 static const char CODE g_ok_text[]  = "OK";
 static const char CODE g_ng_text[]  = "NG";
@@ -704,7 +708,25 @@ static void AppComm_PollTx(void)
 }
 
 /**
- * @brief  记录首个异常，待当前合法 JSON 发完后回复 ERR
+ * @brief  停止当前会话，保留已开始的输出帧并延后清理接收内容
+ * @param  无
+ * @retval 无
+ */
+static void AppComm_StopSession(void)
+{
+    g_start_source       = START_NONE;
+    g_fixture_module     = 0u;
+    g_x5_request         = 0u;
+    g_rx_discard_pending = 1u;
+    if (!g_start_pos)
+    {
+        g_start_busy = 0u; // 尚未发送任何字节的启动可直接取消
+    }
+    app_state = APP_IDLE;
+}
+
+/**
+ * @brief  记录首个异常，待当前合法输出完成后回复 ERR
  * @param  reason 调试错误码
  * @retval 无
  */
@@ -715,17 +737,11 @@ static void AppComm_SetError(uint8 reason)
         app_last_error = reason;
     }
     g_error_pending = 1u;
-    g_x5_request    = 0u;
-    if (!g_start_pos)
-    {
-        g_start_busy = 0u; // 尚未发送任何字节的启动可直接取消
-    }
-    app_state = APP_IDLE;
-    // 保留已经开始输出的合法记录，完整发送后再回复 ERR。
+    AppComm_StopSession();
 }
 
 /**
- * @brief  持续监测治具模号，断开后等待 X5 重新触发
+ * @brief  按启动来源处理 X5 释放，并持续核对锁定模号
  * @param  无
  * @retval 当前输入快照中的唯一模号；0 表示无效
  */
@@ -736,43 +752,48 @@ static uint8 AppComm_PollInputs(void)
     module = InputControl_GetModule(inputs);
     if (!(inputs & 0x10u))
     {
-        g_x5_active = 0u; // 释放只重新武装 X5，不能解除断开锁定或停止模号监测
+        g_x5_active  = 0u;
+        g_x5_request = 0u; // 释放后不能再执行此前尚未下发的 X5 启动
+        if (g_start_source == START_X5)
+        {
+            AppComm_StopSession(); // 正常释放不报错，START 来源不受 X5 影响
+        }
     }
     else if (!g_x5_active)
     {
-        g_x5_active      = 1u;
-        g_fixture_module = module;
+        g_x5_active = 1u;
         if (module)
         {
-            g_x5_retrigger_required = 0u;
-            g_x5_request            = module; // 忙时保留最新一次触发，不丢失脉冲
+            AppComm_StopSession();
+            g_x5_request = module; // 输出忙时仅保留最新一次、仍处于低电平的触发
         }
         else
         {
-            g_x5_retrigger_required = 1u;
             AppComm_SetError(APP_ERROR_MODULE);
         }
         return module;
     }
-    if (g_fixture_module && module != g_fixture_module)
+    if ((g_x5_request && module != g_x5_request) ||
+        (g_fixture_module && module != g_fixture_module))
     {
-        g_fixture_module        = 0u; // 断开只主动报错一次，接回或释放 X5 都不恢复
-        g_x5_retrigger_required = 1u;
-        AppComm_SetError(APP_ERROR_MODULE);
+        AppComm_SetError(APP_ERROR_MODULE); // 停止后清除监测；接回输入不自动恢复
     }
     return module;
 }
 
 /**
- * @brief  锁定已核对的模号并准备下发 test
+ * @brief  锁定已核对的模号和启动来源，准备下发 test
  * @param  id 模号，范围为 1～4
+ * @param  source START_COMMAND 或 START_X5
  * @retval 无
  */
-static void AppComm_StartSession(uint8 id)
+static void AppComm_StartSession(uint8 id, uint8 source)
 {
-    g_module_id      = id;
-    g_fixture_module = id; // START 启动的会话同样持续检测，不依赖 X5 电平
-    g_x5_request     = 0u; // START 与 X5 同时到达时只执行一次启动
+    g_module_id          = id;
+    g_fixture_module     = id;
+    g_start_source       = source;
+    g_x5_request         = 0u; // START 与 X5 同时到达时只执行一次启动
+    g_rx_discard_pending = 0u;
     Uart1_ClearRx();
     g_line_scan    = 0u;
     g_start_pos    = 0u;
@@ -850,9 +871,9 @@ static void AppComm_ExecuteCommand(uint8 module)
              g_command[5] == 'T' && g_command[6] == ',' && g_command[8] == ')' &&
              g_command[7] >= '1' && g_command[7] <= '4')
     {
-        if (module && module == g_command[7] - '0' && !g_x5_retrigger_required)
+        if (module && module == g_command[7] - '0')
         {
-            AppComm_StartSession(module);
+            AppComm_StartSession(module, START_COMMAND);
         }
         else
         {
@@ -1038,7 +1059,8 @@ void AppComm_Init(void)
     g_line_scan                    = 0u;
     g_x5_active                    = 0u; // 上电已为低的 X5 在首次轮询时也检测一次
     g_fixture_module = g_x5_request = g_start_busy = 0u;
-    g_x5_retrigger_required                        = 0u;
+    g_start_source                                 = START_NONE;
+    g_rx_discard_pending                           = 0u;
     Uart1_ClearRx();
     Uart2_ClearRx();
 }
@@ -1073,6 +1095,12 @@ void AppComm_Poll(void)
         AppComm_PollStartCommand(); // 会话已取消时也先发完已开始的 test
         return;
     }
+    if (g_rx_discard_pending)
+    {
+        Uart1_ClearRx();
+        g_line_scan          = 0u;
+        g_rx_discard_pending = 0u;
+    }
     if (g_error_pending)
     {
         Uart1_ClearRx();
@@ -1092,7 +1120,15 @@ void AppComm_Poll(void)
     }
     if (g_x5_request && !g_command_len && !g_command_discard)
     {
-        AppComm_StartSession(g_x5_request); // 不等待旧会话 end，清理后开始新一轮
+        // 执行时再次使用本轮快照核对，释放或模号变化的请求不能启动。
+        if (g_x5_active && module == g_x5_request)
+        {
+            AppComm_StartSession(module, START_X5);
+        }
+        else
+        {
+            AppComm_SetError(APP_ERROR_MODULE);
+        }
         return;
     }
     if (app_state == APP_IDLE)
