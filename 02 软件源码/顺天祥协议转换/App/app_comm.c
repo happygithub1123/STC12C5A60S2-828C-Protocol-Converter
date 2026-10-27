@@ -727,9 +727,9 @@ static void AppComm_SetError(uint8 reason)
 /**
  * @brief  持续监测治具模号，断开后等待 X5 重新触发
  * @param  无
- * @retval 无
+ * @retval 当前输入快照中的唯一模号；0 表示无效
  */
-static void AppComm_PollInputs(void)
+static uint8 AppComm_PollInputs(void)
 {
     uint8 inputs, module;
     inputs = InputControl_ReadActive();
@@ -752,7 +752,7 @@ static void AppComm_PollInputs(void)
             g_x5_retrigger_required = 1u;
             AppComm_SetError(APP_ERROR_MODULE);
         }
-        return;
+        return module;
     }
     if (g_fixture_module && module != g_fixture_module)
     {
@@ -760,6 +760,7 @@ static void AppComm_PollInputs(void)
         g_x5_retrigger_required = 1u;
         AppComm_SetError(APP_ERROR_MODULE);
     }
+    return module;
 }
 
 /**
@@ -810,12 +811,12 @@ static void AppComm_ReplyModule(uint8 id)
 
 /**
  * @brief  执行已经收完整的上位机命令
- * @param  无
+ * @param  module 本轮输入快照中的唯一模号，0 表示无效
  * @retval 无
  */
-static void AppComm_ExecuteCommand(void)
+static void AppComm_ExecuteCommand(uint8 module)
 {
-    uint8 begin, end, i, module;
+    uint8 begin, end, i;
     begin = 0u;
     end   = g_command_len;
     while (begin < end && AppComm_IsSpace(g_command[begin]))
@@ -842,7 +843,6 @@ static void AppComm_ExecuteCommand(void)
     }
     if (AppComm_StringEquals(g_command, "(RD_NUM)"))
     {
-        module = InputControl_GetModule(InputControl_ReadActive());
         AppComm_ReplyModule(module);
     }
     else if (i == 9u && g_command[0] == '(' && g_command[1] == 'S' &&
@@ -850,7 +850,6 @@ static void AppComm_ExecuteCommand(void)
              g_command[5] == 'T' && g_command[6] == ',' && g_command[8] == ')' &&
              g_command[7] >= '1' && g_command[7] <= '4')
     {
-        module = InputControl_GetModule(InputControl_ReadActive());
         if (module && module == g_command[7] - '0' && !g_x5_retrigger_required)
         {
             AppComm_StartSession(module);
@@ -869,9 +868,10 @@ static void AppComm_ExecuteCommand(void)
 /**
  * @brief  接收命令字节，处理帧结束和异常重同步
  * @param  c 新接收的字节
+ * @param  module 本轮输入快照中的唯一模号
  * @retval 无
  */
-static void AppComm_HandleCommandByte(uint8 c)
+static void AppComm_HandleCommandByte(uint8 c, uint8 module)
 {
     if (g_command_discard)
     {
@@ -891,7 +891,7 @@ static void AppComm_HandleCommandByte(uint8 c)
     }
     if (c == '\r' || c == '\n')
     {
-        AppComm_ExecuteCommand();
+        AppComm_ExecuteCommand(module);
         return;
     }
     if (c < 0x20u && c != '\t')
@@ -917,7 +917,7 @@ static void AppComm_HandleCommandByte(uint8 c)
     }
     if (c == ')')
     {
-        AppComm_ExecuteCommand();
+        AppComm_ExecuteCommand(module);
     }
 }
 
@@ -1050,8 +1050,8 @@ void AppComm_Init(void)
  */
 void AppComm_Poll(void)
 {
-    uint8 c;
-    AppComm_PollInputs(); // 在任何串口发送提前返回之前处理输入失效和重触发
+    uint8 c, module;
+    module = AppComm_PollInputs(); // 本轮监测、查询和启动共用一次输入快照
     if (Uart1_Overflow() && app_state != APP_IDLE)
     {
         AppComm_SetError(APP_ERROR_UART1_FULL);
@@ -1084,7 +1084,7 @@ void AppComm_Poll(void)
     }
     if (Uart2_ReadByte(&c))
     {
-        AppComm_HandleCommandByte(c);
+        AppComm_HandleCommandByte(c, module);
         if (g_tx_kind || g_error_pending || g_start_busy)
         {
             return;
