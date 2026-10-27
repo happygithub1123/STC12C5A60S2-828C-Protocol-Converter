@@ -13,7 +13,7 @@ python "04 测试验证/build_keil.py"
 
 主机测试通过 vswhere 查找 Visual Studio C++ 工具链；Keil 默认 D:/Keil_v5，可用 --keil 指定安装目录。内部 RC 固定 22.1184 MHz，两路串口统一为 115200、8 位数据、无校验、1 位停止位。
 
-当前 **152 项通过**，使用与 MCU 相同的 App、Control、Uart1、Uart2 源码。GPIO、串口、时间由主机模型提供；Sys_Millis 使用模拟 16 位毫秒，**不模拟 Timer0 中断执行、8051 指令耗时或 RC 漂移**。
+当前 **152 项通过**，使用与 MCU 相同的 App、Control、Uart1、Uart2 源码。GPIO、串口、时间由主机模型提供；Sys_Millis 使用模拟 16 位毫秒，**不模拟 Timer0 中断执行、8051 指令耗时或 RC 漂移**。本轮固件提交为 `a980899`，当前 HEX 的 SHA256 为 `FA1F9820E4205CC37FFC8B32F47B90D0AEFD2BCACC0323B96AE01C012955857D`。
 
 - 28 条实际样本逐字节匹配，Open 的 36 组仅上传首组；150 条生成记录、87 µs 字符间隔、50 µs 主循环调度和环形缓冲回绕。
 - 空值、单值、多值、尾逗号、通用名称与单位、精度与正号、科学计数法、测点 JSON 转义、UTF-8 及非法编码。
