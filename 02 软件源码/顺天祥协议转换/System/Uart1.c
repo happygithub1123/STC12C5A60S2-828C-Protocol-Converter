@@ -8,12 +8,7 @@
 static volatile uint8 XDATA g_uart1_rx_buffer[UART1_RX_CAPACITY];
 static volatile uint16 g_uart1_read_index, g_uart1_write_index;
 static volatile uint8 g_uart1_rx_overflow;
-#ifndef BRIDGE_HOST_TEST
 static volatile uint8 g_uart1_tx_busy;
-#else
-extern uint8 Host_TxReady(uint8 port);
-extern void Host_Write(uint8 port, uint8 value);
-#endif
 
 /*==============================================================================
  对外函数
@@ -29,7 +24,6 @@ void Uart1_Init(void)
     g_uart1_read_index  = 0u;
     g_uart1_write_index = 0u;
     g_uart1_rx_overflow = 0u;
-#ifndef BRIDGE_HOST_TEST
     // UART1 固定使用 P3.0 接收、P3.1 推挽发送。
     P3M1 = (P3M1 & 0xFCu) | 0x01u;
     P3M0 = (P3M0 & 0xFCu) | 0x02u;
@@ -37,7 +31,6 @@ void Uart1_Init(void)
     SCON            = 0x50u; // 8位数据、无校验、1位停止，允许接收
     g_uart1_tx_busy = 0u;
     ES              = 1;
-#endif
 }
 
 /**
@@ -48,16 +41,12 @@ void Uart1_Init(void)
 uint16 Uart1_Count(void)
 {
     uint16 head, tail;
-#ifndef BRIDGE_HOST_TEST
     uint8 saved;
     saved = ES;
     ES    = 0; // 16 位读写索引需在 UART1 临界区取得快照
-#endif
     head = g_uart1_write_index;
     tail = g_uart1_read_index;
-#ifndef BRIDGE_HOST_TEST
     ES = saved;
-#endif
     if (head >= tail)
     {
         return head - tail;
@@ -89,22 +78,16 @@ uint8 Uart1_Peek(uint16 offset)
 void Uart1_Drop(uint16 length)
 {
     uint16 pos;
-#ifndef BRIDGE_HOST_TEST
     uint8 saved;
-#endif
     pos = g_uart1_read_index + length;
     if (pos >= UART1_RX_CAPACITY)
     {
         pos -= UART1_RX_CAPACITY;
     }
-#ifndef BRIDGE_HOST_TEST
     saved = ES;
     ES    = 0;
-#endif
     g_uart1_read_index = pos;
-#ifndef BRIDGE_HOST_TEST
     ES = saved;
-#endif
 }
 
 /**
@@ -114,16 +97,12 @@ void Uart1_Drop(uint16 length)
  */
 void Uart1_ClearRx(void)
 {
-#ifndef BRIDGE_HOST_TEST
     uint8 saved;
     saved = ES;
     ES    = 0;
-#endif
     g_uart1_read_index  = g_uart1_write_index;
     g_uart1_rx_overflow = 0u;
-#ifndef BRIDGE_HOST_TEST
     ES = saved;
-#endif
 }
 
 /**
@@ -143,11 +122,7 @@ uint8 Uart1_Overflow(void)
  */
 uint8 Uart1_TxIdle(void)
 {
-#ifdef BRIDGE_HOST_TEST
-    return Host_TxReady(1u);
-#else
     return (uint8)(g_uart1_tx_busy == 0u);
-#endif
 }
 
 /**
@@ -161,33 +136,19 @@ uint8 Uart1_TryWrite(uint8 value)
     {
         return 0u;
     }
-#ifdef BRIDGE_HOST_TEST
-    Host_Write(1u, value);
-#else
     g_uart1_tx_busy = 1u;
     SBUF            = value;
-#endif
     return 1u;
 }
 
-#ifdef BRIDGE_HOST_TEST
-/**
- * @brief  主机测试模拟接收中断入口
- * @param  value 模拟收到的字节
- * @retval 无
- */
-void Uart1_HostReceive(uint8 value)
-#else
 /**
  * @brief  处理发送完成与接收字节，不解析协议
  * @param  无
  * @retval 无
  */
 void Uart1_Isr(void) interrupt 4 using 1
-#endif
 {
     uint16 next;
-#ifndef BRIDGE_HOST_TEST
     uint8 value;
     if (TI)
     {
@@ -200,7 +161,6 @@ void Uart1_Isr(void) interrupt 4 using 1
     }
     value = SBUF;
     RI    = 0;
-#endif
     // 溢出后拒收新字节，等待主循环清除，避免覆盖正在编码的数据。
     if (g_uart1_rx_overflow)
     {

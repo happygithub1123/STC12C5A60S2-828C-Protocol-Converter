@@ -6,17 +6,6 @@
 
 #define INPUT_PIN_MASK 0x7Cu
 
-#ifdef BRIDGE_HOST_TEST
-extern uint8 host_p3, host_p3m0, host_p3m1;
-#define INPUT_PORT  host_p3
-#define INPUT_MODE0 host_p3m0
-#define INPUT_MODE1 host_p3m1
-#else
-#define INPUT_PORT  P3
-#define INPUT_MODE0 P3M0
-#define INPUT_MODE1 P3M1
-#endif
-
 /*==============================================================================
  对外函数
  *============================================================================*/
@@ -28,9 +17,9 @@ extern uint8 host_p3, host_p3m0, host_p3m1;
  */
 void InputControl_Init(void)
 {
-    INPUT_MODE0 &= 0x83u; // P3.2～P3.6 使用准双向模式
-    INPUT_MODE1 &= 0x83u;
-    INPUT_PORT |= INPUT_PIN_MASK; // 写 1 释放输入并启用内部弱上拉
+    P3M0 &= 0x83u; // P3.2～P3.6 使用准双向模式
+    P3M1 &= 0x83u;
+    P3 |= INPUT_PIN_MASK; // 写 1 释放输入并启用内部弱上拉
 }
 
 /**
@@ -42,7 +31,7 @@ uint8 InputControl_ReadActive(void)
 {
     uint8 port;
 
-    port = INPUT_PORT; // 只读取一次端口，避免逐路读取造成模号混合
+    port = P3; // 只读取一次端口，避免逐路读取造成模号混合
     return (uint8)(((uint8)~port & INPUT_PIN_MASK) >> 2);
 }
 

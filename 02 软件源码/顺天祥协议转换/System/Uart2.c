@@ -7,12 +7,7 @@
 
 static volatile uint8 XDATA g_uart2_rx_buffer[UART2_RX_CAPACITY];
 static volatile uint8 g_uart2_read_index, g_uart2_write_index, g_uart2_rx_overflow;
-#ifndef BRIDGE_HOST_TEST
 static volatile uint8 g_uart2_tx_busy;
-#else
-extern uint8 Host_TxReady(uint8 port);
-extern void Host_Write(uint8 port, uint8 value);
-#endif
 
 /*==============================================================================
  对外函数
@@ -28,7 +23,6 @@ void Uart2_Init(void)
     g_uart2_read_index  = 0u;
     g_uart2_write_index = 0u;
     g_uart2_rx_overflow = 0u;
-#ifndef BRIDGE_HOST_TEST
     // UART2 选择 P1.2 接收、P1.3 推挽发送。
     AUXR1 &= 0xEFu; // 串口2使用默认 P1.2/P1.3 引脚
     P1ASF &= 0xF3u; // 关闭对应引脚模拟功能
@@ -38,7 +32,6 @@ void Uart2_Init(void)
     S2CON           = 0x50u; // 8位数据、无校验、1位停止，允许接收
     g_uart2_tx_busy = 0u;
     IE2 |= 0x01u;
-#endif
 }
 
 /**
@@ -70,16 +63,12 @@ uint8 Uart2_ReadByte(uint8 *value)
  */
 void Uart2_ClearRx(void)
 {
-#ifndef BRIDGE_HOST_TEST
     uint8 saved;
     saved = IE2 & 0x01u;
     IE2 &= 0xFEu;
-#endif
     g_uart2_read_index  = g_uart2_write_index;
     g_uart2_rx_overflow = 0u;
-#ifndef BRIDGE_HOST_TEST
     IE2 |= saved;
-#endif
 }
 
 /**
@@ -98,11 +87,7 @@ uint8 Uart2_Overflow(void)
  */
 uint8 Uart2_TxIdle(void)
 {
-#ifdef BRIDGE_HOST_TEST
-    return Host_TxReady(2u);
-#else
     return (uint8)(g_uart2_tx_busy == 0u);
-#endif
 }
 
 /**
@@ -116,33 +101,19 @@ uint8 Uart2_TryWrite(uint8 value)
     {
         return 0u;
     }
-#ifdef BRIDGE_HOST_TEST
-    Host_Write(2u, value);
-#else
     g_uart2_tx_busy = 1u;
     S2BUF           = value;
-#endif
     return 1u;
 }
 
-#ifdef BRIDGE_HOST_TEST
-/**
- * @brief  主机测试模拟接收中断入口
- * @param  value 模拟收到的字节
- * @retval 无
- */
-void Uart2_HostReceive(uint8 value)
-#else
 /**
  * @brief  处理发送完成与接收字节，不解析协议
  * @param  无
  * @retval 无
  */
 void Uart2_Isr(void) interrupt 8 using 2
-#endif
 {
     uint8 next;
-#ifndef BRIDGE_HOST_TEST
     uint8 value;
     if (S2CON & 0x02u)
     {
@@ -155,7 +126,6 @@ void Uart2_Isr(void) interrupt 8 using 2
     }
     value = S2BUF;
     S2CON &= 0xFEu;
-#endif
     if (g_uart2_rx_overflow)
     {
         return;
