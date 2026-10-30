@@ -17,8 +17,10 @@ def main():
     name = 'Bridge828C'
     out = PROJECT / 'Objects'
     out.mkdir(exist_ok=True)
+    listings = PROJECT / 'Listings'
+    listings.mkdir(exist_ok=True)
     lines = ['Internal RC: 22.1184 MHz', 'UART1/UART2: 115200, 8 data bits, no parity, 1 stop bit', '']
-    sources = ['User/main.c', 'App/app_comm.c', 'Control/input_control.c', 'System/System.c', 'System/Uart1.c', 'System/Uart2.c']
+    sources = ['User/main.c', 'App/app_comm.c', 'Hardware/input_control.c', 'System/System.c', 'System/Uart1.c', 'System/Uart2.c']
     objects = []
 
     def run(exe, params):
@@ -34,18 +36,22 @@ def main():
         for src in sources:
             stem = Path(src).stem
             obj = (out / (stem + '.obj')).relative_to(PROJECT).as_posix()
-            listing = (out / (stem + '.lst')).relative_to(PROJECT).as_posix()
+            listing = (listings / (stem + '.lst')).relative_to(PROJECT).as_posix()
             run('C51.exe', [src, 'SMALL', 'OPTIMIZE(8,SPEED)',
-                            'INCDIR(.\\Public;.\\System;.\\App;.\\Control)', f'OBJECT({obj})', f'PRINT({listing})'])
+                            'INCDIR(.\\Public;.\\System;.\\Hardware;.\\App)', f'OBJECT({obj})', f'PRINT({listing})'])
             objects.append(obj)
+        print('PASS: all C sources compiled; no warnings or errors')
+        if not (PROJECT / 'User' / 'STARTUP.A51').is_file():
+            raise RuntimeError('Missing User/STARTUP.A51; C compilation passed, full firmware build is blocked')
         startup = (out / 'STARTUP.obj').relative_to(PROJECT).as_posix()
         run('A51.EXE', ['User/STARTUP.A51', f'OBJECT({startup})',
-                       f'PRINT({out.name}/STARTUP.lst)'])
+                       f'PRINT({listings.name}/STARTUP.lst)'])
         target = f'{out.name}/{name}'
+        mapping_path = listings / (name + '.m51')
         run('BL51.EXE', [','.join([startup, *objects]), 'TO', target, 'RAMSIZE(256)',
                         'XDATA(0000H-03FFH)', 'CODE(0000H-0EFFFH)',
-                        f'PRINT({target}.m51)'])
-        mapping = (out / (name + '.m51')).read_text(encoding='gb18030', errors='replace')
+                        f'PRINT({mapping_path.relative_to(PROJECT).as_posix()})'])
+        mapping = mapping_path.read_text(encoding='gb18030', errors='replace')
         segments = re.findall(r'^\s*IDATA\s+([0-9A-F]+)H\s+([0-9A-F]+)H\s+.*?\?STACK', mapping, re.M)
         if not segments:
             raise RuntimeError('Cannot locate ?STACK in linker map')

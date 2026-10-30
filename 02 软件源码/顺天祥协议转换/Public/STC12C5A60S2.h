@@ -3,7 +3,7 @@
 
 /////////////////////////////////////////////////
 
-//°üº¬±¾Í·ÎÄ¼þºó,²»ÓÃÁíÍâÔÙ°üº¬"REG51.H"
+//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í·ï¿½Ä¼ï¿½ï¿½ï¿½,ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ù°ï¿½ï¿½ï¿½"REG51.H"
 
 #include "stdio.h"
 #include "intrins.h"
@@ -99,7 +99,7 @@ sfr         IE          =           0xA8;
     sbit    EX1         =           IE^2;
     sbit    ET0         =           IE^1;
     sbit    EX0         =           IE^0;
-    
+
 sfr         SADDR       =           0xA9;
 sfr         IE2         =           0xAF;
 
@@ -208,7 +208,7 @@ sfr         ACC         =           0xE0;
     sbit    ACC5        =           ACC^5;
     sbit    ACC6        =           ACC^6;
     sbit    ACC7        =           ACC^7;
-    
+
 sfr         CL          =           0xE9;
 sfr         CCAP0L      =           0xEA;
 sfr         CCAP1L      =           0xEB;
@@ -231,4 +231,3 @@ sfr         CCAP0H      =           0xFA;
 sfr         CCAP1H      =           0xFB;
 
 #endif
-

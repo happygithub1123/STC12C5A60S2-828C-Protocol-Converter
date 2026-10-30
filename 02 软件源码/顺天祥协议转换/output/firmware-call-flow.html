@@ -1,0 +1,249 @@
+<div id="stc-call-flow">
+  <div class="flow-heading">
+    <h3>STC12 · 代码调用流程</h3>
+    <span class="text-small text-muted">源码顺序示意 · 当前缺少启动汇编 · 非实时跟踪</span>
+  </div>
+  <div class="viz-controls">
+    <label class="form-label">演示场景
+      <select class="form-select" data-role="scene" aria-label="选择代码调用场景">
+        <option value="start">START 命令启动</option>
+        <option value="boot">上电初始化</option>
+        <option value="button">X5 按键消抖启动</option>
+        <option value="query">RD_NUM 模号查询</option>
+        <option value="record">主板记录 → JSON → end</option>
+        <option value="error">上传中模号断开 → ERR</option>
+      </select>
+    </label>
+    <button class="btn btn-primary" type="button" data-role="play">播放调用</button>
+    <button class="btn" type="button" data-role="previous" aria-label="上一步">上一步</button>
+    <button class="btn" type="button" data-role="next" aria-label="下一步">下一步</button>
+  </div>
+  <div class="flow-status" aria-live="polite" aria-atomic="true">
+    <span data-role="state"></span>
+    <span class="text-small text-muted tabular-nums" data-role="position"></span>
+  </div>
+  <div class="progress" role="progressbar" aria-label="场景进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-role="progress">
+    <div class="progress-bar" data-role="bar" style="width:0%"></div>
+  </div>
+  <div class="flow-diagram" role="group" aria-label="按执行先后排列的关键函数与分支">
+    <svg class="flow-connections" aria-hidden="true"><defs><marker id="stc-flow-arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M1,1 L6,4 L1,7" fill="none" stroke="currentColor" stroke-width="1.2"></path></marker></defs><g data-role="edges"></g><circle class="flow-packet" r="4" hidden></circle></svg>
+    <div class="flow-nodes" data-role="nodes"></div>
+  </div>
+  <div class="flow-selection">
+    <div data-role="detail" aria-live="polite"></div>
+    <div class="text-small text-muted flow-chain" data-role="chain"></div>
+  </div>
+</div>
+<style>
+#stc-call-flow { color:var(--foreground); }
+#stc-call-flow .flow-heading { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 20px; padding-right:90px; margin-bottom:14px; }
+#stc-call-flow .flow-heading h3 { margin:0; }
+#stc-call-flow .flow-status { display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; margin:14px 0 8px; }
+#stc-call-flow .flow-diagram { position:relative; margin:20px 0 14px; }
+#stc-call-flow .flow-nodes { display:grid; gap:30px 24px; position:relative; }
+#stc-call-flow .flow-node { box-sizing:border-box; min-width:0; min-height:112px; padding:11px 12px; border:1px solid var(--border); border-radius:8px; background:var(--background); display:flex; flex-direction:column; gap:5px; }
+#stc-call-flow .flow-node[data-passed="true"] { background:color-mix(in srgb,var(--viz-series-1) 5%,var(--background)); }
+#stc-call-flow .flow-node[data-current="true"] { border-color:var(--viz-series-1); background:color-mix(in srgb,var(--viz-series-1) 13%,var(--background)); box-shadow:0 0 0 1px var(--viz-series-1); }
+#stc-call-flow .flow-node-meta { display:flex; gap:8px; align-items:baseline; color:var(--muted-foreground); }
+#stc-call-flow .flow-node code { color:var(--foreground); background:transparent; padding:0; overflow-wrap:anywhere; font-weight:500; }
+#stc-call-flow .flow-node-label { overflow-wrap:anywhere; }
+#stc-call-flow .flow-node-source { margin-top:auto; color:var(--muted-foreground); overflow-wrap:anywhere; }
+#stc-call-flow .flow-connections { position:absolute; inset:0; width:100%; height:100%; overflow:visible; color:var(--muted-foreground); pointer-events:none; }
+#stc-call-flow .flow-edge { fill:none; stroke:var(--border); stroke-width:1.2; }
+#stc-call-flow .flow-edge[data-active="true"] { stroke:var(--viz-series-1); stroke-width:2; }
+#stc-call-flow .flow-packet { fill:var(--viz-series-1); }
+#stc-call-flow .flow-packet[hidden] { display:none; }
+#stc-call-flow .flow-selection { display:grid; gap:7px; }
+#stc-call-flow .flow-chain { overflow-wrap:anywhere; }
+@media (prefers-reduced-motion:reduce) { #stc-call-flow .flow-packet { display:none; } }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('stc-call-flow');
+  const el = name => root.querySelector('[data-role="' + name + '"]');
+  const ns = 'http://www.w3.org/2000/svg';
+  const app = line => 'App/app_comm.c:' + line;
+  const step = (fn, source, label, state, detail, chain, relation = '调用') => ({fn, source, label, state, detail, chain, relation});
+  const scenes = {
+    boot: [
+      step('main()', 'User/main.c:15', 'C 程序入口', '源码顺序 · 启动支持缺失', '当前 User/STARTUP.A51 已删除，完整固件构建受阻；这里从现有 main 源码开始演示调用顺序。', 'C 启动环境（当前缺失） → main', 'C 入口'),
+      step('Sys_Init()', 'System/System.c:33', '系统初始化', '初始化 · 中断关闭', '关闭中断，配置时钟分频及共享串口波特率发生器。', 'main → Sys_Init'),
+      step('Uart1_Init()', 'System/Uart1.c:22', '初始化主板侧串口', '初始化 · 中断关闭', '配置 P3.0/P3.1、接收缓冲和 UART1 中断使能。', 'main → Sys_Init → Uart1_Init'),
+      step('Uart2_Init()', 'System/Uart2.c:21', '初始化上位机侧串口', '初始化 · 中断关闭', '返回 Sys_Init，再配置 P1.2/P1.3 和 UART2。', 'main → Sys_Init → Uart2_Init', '返回后调用'),
+      step('Sys_Init() · Timer0', 'System/System.c:51', '配置约 1 ms 消抖时基', '初始化 · 中断关闭', 'Timer0 使用内部计时；串口和定时器准备就绪。', 'main → Sys_Init', '返回后继续'),
+      step('InputControl_Init()', 'Hardware/input_control.c:18', '配置 X1～X5 输入', '初始化 · 中断关闭', '返回 main，设置 P3.2～P3.6 为准双向输入并释放为高。', 'main → InputControl_Init', '返回 main 后调用'),
+      step('AppComm_Init()', app(1058), '清空会话和接收状态', 'APP_IDLE · 空闲', '初始化会话；上电按住 X5 不启动，必须先确认松开。', 'main → AppComm_Init', '返回 main 后调用'),
+      step('EA = 1', 'User/main.c:20', '开启总中断', 'APP_IDLE · 空闲', '初始化全部完成后，main 开启总中断。', 'main', '返回后执行'),
+      step('AppComm_Poll()', app(1080), '进入 while (1) 主循环', 'APP_IDLE · 空闲', '每轮先读取输入，再按发送、异常、命令、按键和主板数据的优先次序处理。', 'main → AppComm_Poll', '循环调用')
+    ],
+    start: [
+      step('AppComm_Poll()', app(1080), 'X1 唯一有效；上位机发 START', 'APP_IDLE · 空闲', '示例输入为 (START,1)，X1 为低，X2～X4 为高。', 'main → AppComm_Poll', '主循环'),
+      step('AppComm_PollInputs()', app(745), '获取本轮输入快照', 'APP_IDLE · 空闲', '先完成模号监测和按键处理，再读取上位机命令。', 'main → AppComm_Poll → AppComm_PollInputs'),
+      step('InputControl_GetModule()', 'Hardware/input_control.c:43', '唯一有效模号为 1', 'APP_IDLE · 空闲', 'PollInputs 先调用 ReadActive，再用同一快照识别唯一模号。', 'main → AppComm_Poll → AppComm_PollInputs → InputControl_GetModule', '读取输入后调用'),
+      step('Uart2_ReadByte()', 'System/Uart2.c:42', '逐字节取出上位机命令', 'APP_IDLE · 空闲', 'UART2 中断先将字节放入环形区；每次轮询取出一个字节。', 'main → AppComm_Poll → Uart2_ReadByte', '返回 Poll 后调用'),
+      step('AppComm_HandleCommandByte()', app(901), '收到右括号，命令完整', 'APP_IDLE · 空闲', '此处合并展示多轮接收；收到 ) 即可执行，无须等待 CRLF。', 'main → AppComm_Poll → AppComm_HandleCommandByte', '读取字节后调用'),
+      step('AppComm_ExecuteCommand()', app(844), '核对 START 参数与真实模号', 'APP_IDLE · 空闲', '命令中的 1 与当前唯一模号 1 匹配，允许启动。', 'main → AppComm_Poll → AppComm_HandleCommandByte → AppComm_ExecuteCommand'),
+      step('AppComm_StartSession()', app(797), '锁定模号并清除旧数据', 'APP_SENDING_START · 发送启动', '锁定 MH=1，清空 UART1 接收，置 g_start_busy=1；此时尚未发送 test。', 'main → AppComm_Poll → AppComm_HandleCommandByte → AppComm_ExecuteCommand → AppComm_StartSession'),
+      step('AppComm_PollStartCommand()', app(1030), '后续轮询逐字节发送 test', 'APP_SENDING_START · 发送启动', '返回主循环；后续每轮仍先处理输入，再处理未完成的启动指令。', 'main → AppComm_Poll → AppComm_PollStartCommand', '后续多轮调用'),
+      step('Uart1_TryWrite()', 'System/Uart1.c:133', '发送 test 与 CRLF', 'APP_SENDING_START · 发送启动', '每次硬件空闲才交出一个字节；完整命令为 74 65 73 74 0D 0A。', 'main → AppComm_Poll → AppComm_PollStartCommand → Uart1_TryWrite'),
+      step('app_state = APP_WAIT_FIRST', app(1044), '启动发完，等待主板记录', 'APP_WAIT_FIRST · 等待首条记录', '最后一字节发送完成后转为等待；不设置首条记录超时。', 'main → AppComm_Poll → AppComm_PollStartCommand', '后续轮询确认完成')
+    ],
+    button: [
+      step('AppComm_Poll()', app(1080), '空闲、X1 有效、X5 已稳定松开', 'APP_IDLE · 空闲', '场景前提：X5 高电平已稳定至少 20 ms，允许下一次按下。', 'main → AppComm_Poll', '主循环'),
+      step('AppComm_PollInputs()', app(745), '检测 X5 按下', 'APP_IDLE · 空闲', '每一轮读取 GPIO、识别模号并取得当前毫秒计数。', 'main → AppComm_Poll → AppComm_PollInputs'),
+      step('InputControl_ReadActive()', 'Hardware/input_control.c:30', '读取低电平输入位图', 'APP_IDLE · 空闲', '一次读取 P3，得到 X1 和 X5 有效；同一快照用于模号和按键。', 'main → AppComm_Poll → AppComm_PollInputs → InputControl_ReadActive'),
+      step('Sys_Millis()', 'System/System.c:69', '记录候选电平变化时间', 'APP_IDLE · 空闲', 'Timer0 中断独立推进毫秒计数；Sys_Millis 原子读取计数。', 'main → AppComm_Poll → AppComm_PollInputs → Sys_Millis', '识别模号后调用'),
+      step('now - g_x5_since < 20', app(771), '稳定不足 20 ms：不启动', 'APP_IDLE · 空闲', '这一步跨越多轮轮询；主循环继续执行，没有阻塞等待。', 'main → AppComm_Poll → AppComm_PollInputs', '后续轮询 · 分支'),
+      step('g_x5_request = module', app(781), '低电平稳定 20 ms：接受按下', 'APP_IDLE · 空闲', '确认一次高→低事件，保存请求模号 1；忙时按下则忽略、不排队。', 'main → AppComm_Poll → AppComm_PollInputs', '后续轮询 · 分支'),
+      step('AppComm_StartSession()', app(797), '重新核对模号并建立会话', 'APP_SENDING_START · 发送启动', '本例没有未完成命令或回复，Poll 消费按键请求并启动。', 'main → AppComm_Poll → AppComm_StartSession', '返回 Poll 后调用'),
+      step('AppComm_PollStartCommand()', app(1030), '后续轮询开始下发 test', 'APP_SENDING_START · 发送启动', '有效事件被消费；松开继续测试，长按不重复启动。', 'main → AppComm_Poll → AppComm_PollStartCommand', '后续多轮调用'),
+      step('Uart1_TryWrite()', 'System/Uart1.c:133', '向主板发送一次 test', 'APP_SENDING_START → APP_WAIT_FIRST', '通过多轮非阻塞发送完成 test 和 CRLF，完成后进入等待状态。', 'main → AppComm_Poll → AppComm_PollStartCommand → Uart1_TryWrite')
+    ],
+    query: [
+      step('Uart2_Isr()', 'System/Uart2.c:114', '上位机发送 (RD_NUM)', 'APP_IDLE · 空闲', '硬件接收中断把字节写入 UART2 环形缓冲；中断不解析命令。', 'UART2 硬件事件 → Uart2_Isr', '硬件中断'),
+      step('AppComm_PollInputs()', app(745), '主循环读取实际模号', 'APP_IDLE · 空闲', '本例 X2 唯一为低，当前模号为 2；中断结束后主循环继续。', 'main → AppComm_Poll → AppComm_PollInputs', '中断返回 · 主循环'),
+      step('Uart2_ReadByte()', 'System/Uart2.c:42', '逐字节消费命令', 'APP_IDLE · 空闲', '每轮从缓冲读取一个字节，交给命令处理函数。', 'main → AppComm_Poll → Uart2_ReadByte', '返回 Poll 后调用'),
+      step('AppComm_HandleCommandByte()', app(901), '收齐 RD_NUM 命令', 'APP_IDLE · 空闲', '收到 ) 后调用 ExecuteCommand，匹配 (RD_NUM)。', 'main → AppComm_Poll → AppComm_HandleCommandByte', '多轮接收后调用'),
+      step('AppComm_ReplyModule()', app(816), '选择模号 2 的固定回复', 'APP_IDLE · 空闲', 'ExecuteCommand 调用 ReplyModule(2)；查询不会向主板发送 test。', 'main → AppComm_Poll → AppComm_HandleCommandByte → AppComm_ExecuteCommand → AppComm_ReplyModule', '经 ExecuteCommand 调用'),
+      step('AppComm_StartTx(TX_LITERAL)', app(655), '准备固定字符串发送', 'APP_IDLE · 空闲', '回复内容为 {"Result":"2"}，帧尾 CRLF；只初始化发送状态。', 'main → AppComm_Poll → … → AppComm_ReplyModule → AppComm_StartTx'),
+      step('AppComm_PollTx()', app(670), '后续轮询推进回复', 'APP_IDLE · 空闲', 'g_tx_kind 有效时优先处理发送，本轮发送处理后返回。', 'main → AppComm_Poll → AppComm_PollTx', '后续多轮调用'),
+      step('Uart2_TryWrite()', 'System/Uart2.c:98', '完整回复模号 JSON', 'APP_IDLE · 空闲', 'UART2 输出 {"Result":"2"} + CRLF；查询不建立测试会话。', 'main → AppComm_Poll → AppComm_PollTx → Uart2_TryWrite')
+    ],
+    record: [
+      step('Uart1_Isr()', 'System/Uart1.c:149', '接收主板测试记录', 'APP_WAIT_FIRST · 等待首条记录', '前提：已启动模号 1。主板输入 D1-1,9.0,6.0,V,(2-5=12.6),NG。', 'UART1 硬件事件 → Uart1_Isr', '硬件中断'),
+      step('AppComm_PollBoard()', app(978), '主循环扫描完整行', 'APP_WAIT_FIRST · 等待首条记录', '每轮先监测输入；没有优先任务时扫描 UART1，找到 CR 或 LF 才解析。', 'main → AppComm_Poll → AppComm_PollBoard', '中断返回 · 多轮扫描'),
+      step('AppComm_ParseRecord()', app(339), '校验名称、上下限、单位和结果', 'APP_WAIT_FIRST · 等待首条记录', '验证结构与字段，保存流式输出需要的名称、单位和偏移。', 'main → AppComm_Poll → AppComm_PollBoard → AppComm_ParseRecord'),
+      step('AppComm_ValidateBody()', app(271), '校验所有测量组', 'APP_WAIT_FIRST · 等待首条记录', '所有组均检查结构、UTF-8 和数值；最终只上传首组。', 'main → AppComm_Poll → AppComm_PollBoard → AppComm_ParseRecord → AppComm_ValidateBody'),
+      step('AppComm_StartTx(TX_JSON)', app(655), '准备一条 JSON', 'APP_RECEIVING · 接收记录', 'ParseRecord 成功返回后，PollBoard 设置接收状态并初始化 JSON 发送。', 'main → AppComm_Poll → AppComm_PollBoard → AppComm_StartTx', '返回 PollBoard 后调用'),
+      step('AppComm_PollTx()', app(670), '后续轮询推进上传', 'APP_RECEIVING · 接收记录', '串口空闲时生成并发送下一个字节；输入监测仍在每轮最前执行。', 'main → AppComm_Poll → AppComm_PollTx', '后续多轮调用'),
+      step('AppComm_NextJsonByte()', app(543), '逐字节编码与转义', 'APP_RECEIVING · 接收记录', '定位首组、保留数值精度并转义文本，随编码释放接收区。', 'main → AppComm_Poll → AppComm_PollTx → AppComm_NextJsonByte'),
+      step('Uart2_TryWrite()', 'System/Uart2.c:98', '向上位机上传完整 JSON', 'APP_RECEIVING · 接收记录', '输出：{"MH":"1","Result":"NG","D1-1":"2-5=12.6 V:NG"} + CRLF。', 'main → AppComm_Poll → AppComm_PollTx → Uart2_TryWrite', '编码返回后调用'),
+      step('AppComm_PollBoard() · end', app(993), '后续接收到主板 end', 'APP_RECEIVING → APP_IDLE', '当前 JSON 发完后再处理 end；清空接收、解除旧模号监测，不追加汇总。', 'main → AppComm_Poll → AppComm_PollBoard', '后续中断接收 · 轮询处理')
+    ],
+    error: [
+      step('AppComm_Poll()', app(1080), '正在上传时，活动模号断开', 'APP_RECEIVING · 接收记录', '场景前提：已经开始发送一条合法 JSON，此时 X1 断开。', 'main → AppComm_Poll', '主循环'),
+      step('AppComm_PollInputs()', app(745), '同一快照识别模号失效', 'APP_RECEIVING · 接收记录', 'ReadActive 和 GetModule 返回当前模号 0，与锁定模号 1 不同。', 'main → AppComm_Poll → AppComm_PollInputs'),
+      step('AppComm_SetError(6)', app(730), '锁存模号异常', 'APP_RECEIVING · 接收记录', '记录 APP_ERROR_MODULE，置 g_error_pending，调用 StopSession。', 'main → AppComm_Poll → AppComm_PollInputs → AppComm_SetError'),
+      step('AppComm_StopSession()', app(713), '停止会话，延后清理接收区', 'APP_IDLE · 错误待回复', '清除活动模号与待按键请求；保留已经开始的合法输出帧。', 'main → AppComm_Poll → AppComm_PollInputs → AppComm_SetError → AppComm_StopSession'),
+      step('AppComm_PollTx()', app(670), '先发完当前 JSON', 'APP_IDLE · 原 JSON 正在收尾', '返回 Poll 后，g_tx_kind 优先于待错误；多轮轮询继续把旧 JSON 完整发完。', 'main → AppComm_Poll → AppComm_PollTx', '返回 Poll · 后续多轮'),
+      step('Uart1_ClearRx()', 'System/Uart1.c:98', '当前帧完成后清理旧数据', 'APP_IDLE · 错误待回复', 'g_rx_discard_pending 在旧输出结束后处理，丢弃旧轮数据。', 'main → AppComm_Poll → Uart1_ClearRx', '后续轮询'),
+      step('AppComm_StartTx(TX_LITERAL)', app(655), '准备一次 ERR 回复', 'APP_IDLE · ERR 待发送', '处理 g_error_pending，设置固定 ERR 字符串并准备发送。', 'main → AppComm_Poll → AppComm_StartTx', '错误分支调用'),
+      step('AppComm_PollTx()', app(670), '后续轮询发送 ERR', 'APP_IDLE · ERR 正在发送', '只有旧的合法 JSON 发送完后，才轮到 ERR。', 'main → AppComm_Poll → AppComm_PollTx', '后续多轮调用'),
+      step('Uart2_TryWrite()', 'System/Uart2.c:98', '输出 ERR，等待有效新启动', 'APP_IDLE · 空闲', '输出 {"Result":"ERR"} + CRLF；接回模号不自动恢复，需有效 START 或新按键。', 'main → AppComm_Poll → AppComm_PollTx → Uart2_TryWrite')
+    ]
+  };
+  let scene = 'start', index = 0, playing = false, timer = 0, motion = 0;
+  const sceneSelect = el('scene'), play = el('play'), next = el('next'), previous = el('previous');
+  const grid = el('nodes'), svg = root.querySelector('.flow-connections'), edges = el('edges');
+  const packet = root.querySelector('.flow-packet');
+  let columns = 3;
+  const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const save = () => {
+    if (window.openai && typeof window.openai.setWidgetState === 'function') {
+      window.openai.setWidgetState({modelContent:{scene, step:index, function:scenes[scene][index].fn}, privateContent:{scene,index}}).catch(() => {});
+    }
+  };
+  function pause() {
+    playing = false; clearTimeout(timer); cancelAnimationFrame(motion); packet.setAttribute('hidden','');
+    play.textContent = index === scenes[scene].length - 1 ? '重新播放' : '播放调用';
+    play.setAttribute('aria-pressed','false');
+  }
+  function makeNodes() {
+    grid.replaceChildren();
+    scenes[scene].forEach((s, i) => {
+      const node = document.createElement('div'); node.className = 'flow-node';
+      const meta = document.createElement('div'); meta.className = 'flow-node-meta text-small';
+      const number = document.createElement('span'); number.className = 'tabular-nums'; number.textContent = String(i+1).padStart(2,'0');
+      const relation = document.createElement('span'); relation.textContent = s.relation;
+      meta.append(number, relation);
+      const fn = document.createElement('code'); fn.textContent = s.fn;
+      const label = document.createElement('div'); label.className = 'flow-node-label'; label.textContent = s.label;
+      const source = document.createElement('div'); source.className = 'flow-node-source text-small'; source.textContent = s.source;
+      node.append(meta,fn,label,source); grid.append(node);
+    });
+    layout();
+  }
+  function layout() {
+    cancelAnimationFrame(motion); packet.setAttribute('hidden','');
+    const width = grid.getBoundingClientRect().width;
+    columns = width >= 660 ? 3 : width >= 440 ? 2 : 1;
+    grid.style.gridTemplateColumns = 'repeat(' + columns + ',minmax(0,1fr))';
+    [...grid.children].forEach((node,i) => {
+      const row = Math.floor(i/columns), offset = i%columns;
+      node.style.gridRow = row+1;
+      node.style.gridColumn = row%2 === 0 ? offset+1 : columns-offset;
+    });
+    const area = grid.getBoundingClientRect();
+    svg.setAttribute('viewBox','0 0 '+area.width+' '+area.height);
+    edges.replaceChildren();
+    const nodes = [...grid.children];
+    for (let i=1; i<nodes.length; i++) {
+      const a=nodes[i-1].getBoundingClientRect(), b=nodes[i].getBoundingClientRect();
+      let x1,y1,x2,y2;
+      if (Math.floor((i-1)/columns) === Math.floor(i/columns)) {
+        const right=b.left>a.left; x1=(right?a.right:a.left)-area.left; x2=(right?b.left-4:b.right+4)-area.left;
+        y1=a.top+a.height/2-area.top; y2=b.top+b.height/2-area.top;
+      } else {
+        x1=a.left+a.width/2-area.left; x2=b.left+b.width/2-area.left;
+        y1=a.bottom-area.top; y2=b.top-area.top-4;
+      }
+      const p=document.createElementNS(ns,'path'); p.setAttribute('d','M'+x1+','+y1+' L'+x2+','+y2);
+      p.setAttribute('class','flow-edge'); p.setAttribute('marker-end','url(#stc-flow-arrow)'); p.dataset.target=String(i); edges.append(p);
+    }
+    update(false);
+  }
+  function animatePath(path, reverse) {
+    cancelAnimationFrame(motion);
+    if (!path || reduced()) { packet.setAttribute('hidden',''); return; }
+    const length=path.getTotalLength(), start=performance.now();
+    packet.removeAttribute('hidden');
+    function frame(now) {
+      const t=Math.min(1,(now-start)/480), p=path.getPointAtLength(length*(reverse?1-t:t));
+      packet.setAttribute('cx',p.x); packet.setAttribute('cy',p.y);
+      if (t<1) motion=requestAnimationFrame(frame); else packet.setAttribute('hidden','');
+    }
+    motion=requestAnimationFrame(frame);
+  }
+  function update(animate = false, oldIndex = index) {
+    const steps=scenes[scene], selected=steps[index];
+    [...grid.children].forEach((n,i) => { n.dataset.current=String(i===index); n.dataset.passed=String(i<index); if(i===index)n.setAttribute('aria-current','step');else n.removeAttribute('aria-current'); });
+    edges.querySelectorAll('path').forEach(p=>p.dataset.active=String(Number(p.dataset.target)===index));
+    el('state').textContent=selected.state; el('position').textContent=(index+1)+' / '+steps.length;
+    el('detail').textContent=selected.detail; el('chain').textContent=selected.chain;
+    const percent=Math.round((index+1)/steps.length*100); el('progress').setAttribute('aria-valuenow',percent); el('bar').style.width=percent+'%';
+    previous.disabled=index===0; next.disabled=index===steps.length-1;
+    if (!playing) play.textContent=index===steps.length-1?'重新播放':'播放调用';
+    if (animate) animatePath(edges.querySelector('[data-target="'+Math.max(index,oldIndex)+'"]'),index<oldIndex);
+  }
+  function move(delta) {
+    const old=index; index=Math.max(0,Math.min(scenes[scene].length-1,index+delta)); update(true,old);
+  }
+  function schedule() {
+    timer=setTimeout(()=>{
+      if (!playing) return;
+      if (index<scenes[scene].length-1) { move(1); if(index===scenes[scene].length-1){ playing=false; play.textContent='重新播放'; play.setAttribute('aria-pressed','false'); save(); }else schedule(); }
+    },1450);
+  }
+  play.addEventListener('click',()=>{
+    if (playing) {pause();save();return;}
+    if(index===scenes[scene].length-1){index=0;update(false);}
+    playing=true;play.textContent='暂停';play.setAttribute('aria-pressed','true');schedule();save();
+  });
+  next.addEventListener('click',()=>{pause();move(1);save();});
+  previous.addEventListener('click',()=>{pause();move(-1);save();});
+  sceneSelect.addEventListener('change',()=>{pause();scene=sceneSelect.value;index=0;makeNodes();save();});
+  function restore(saved) {
+    const value=saved && (saved.privateContent || saved.modelContent || saved);
+    if(!value || !Object.prototype.hasOwnProperty.call(scenes,value.scene))return;
+    const n=Number.isInteger(value.index)?value.index:value.step;
+    const targetIndex=Number.isInteger(n)?Math.max(0,Math.min(n,scenes[value.scene].length-1)):0;
+    if(value.scene===scene && targetIndex===index)return;
+    pause();scene=value.scene;index=targetIndex;
+    sceneSelect.value=scene;makeNodes();
+  }
+  makeNodes(); restore(window.openai && window.openai.widgetState);
+  const observer=new ResizeObserver(()=>layout()); observer.observe(grid);
+  window.addEventListener('openai:set_globals',event=>{if(event.detail && event.detail.globals && event.detail.globals.widgetState)restore(event.detail.globals.widgetState);});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden && playing){pause();save();}});
+})();
+</script>

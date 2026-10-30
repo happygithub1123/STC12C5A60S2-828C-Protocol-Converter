@@ -52,7 +52,7 @@
           <CreateHexFile>1</CreateHexFile>
           <DebugInformation>1</DebugInformation>
           <BrowseInformation>1</BrowseInformation>
-          <ListingPath>.\Objects\</ListingPath>
+          <ListingPath>.\Listings\</ListingPath>
           <HexFormatSelection>0</HexFormatSelection>
           <Merge32K>0</Merge32K>
           <CreateBatchFile>0</CreateBatchFile>
@@ -324,7 +324,7 @@
               <MiscControls></MiscControls>
               <Define></Define>
               <Undefine></Undefine>
-              <IncludePath>.\User;.\App;.\System;.\Public;.\Control</IncludePath>
+              <IncludePath>.\User;.\App;.\Hardware;.\System;.\Public</IncludePath>
             </VariousControls>
           </C51>
           <Ax51>
@@ -380,11 +380,6 @@
               <FileName>main.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\User\main.c</FilePath>
-            </File>
-            <File>
-              <FileName>STARTUP.A51</FileName>
-              <FileType>2</FileType>
-              <FilePath>.\User\STARTUP.A51</FilePath>
             </File>
           </Files>
         </Group>
@@ -459,17 +454,17 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>Control</GroupName>
+          <GroupName>Hardware</GroupName>
           <Files>
             <File>
               <FileName>input_control.c</FileName>
               <FileType>1</FileType>
-              <FilePath>.\Control\input_control.c</FilePath>
+              <FilePath>.\Hardware\input_control.c</FilePath>
             </File>
             <File>
               <FileName>input_control.h</FileName>
               <FileType>5</FileType>
-              <FilePath>.\Control\input_control.h</FilePath>
+              <FilePath>.\Hardware\input_control.h</FilePath>
             </File>
           </Files>
         </Group>

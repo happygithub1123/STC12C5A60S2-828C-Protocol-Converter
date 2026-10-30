@@ -93,18 +93,24 @@ RD_NUM 按新 828C 功能治具说明 PDF 返回 Result JSON，供上位机识�
 
 ## 工程结构
 
+新增 **[05 仿真：3D 通讯交互演示](05%20仿真/README.md)**。双击其中的 `启动仿真.cmd`，可离线查看上位机、STC12 芯片与测试主板的通讯动画，操作模号和 X5，观察串口字节及 JSON 转换。需要 Node.js 20 或更新版本和支持 WebGL2 的浏览器；这是独立的协议行为演示，固件实板验证仍按原流程执行。
+
 ```text
 01 参考资料/                  原始说明、任务书和主板样本
 02 软件源码/顺天祥协议转换/
   User/                      启动、初始化和主循环
   App/                       命令、会话、记录解析和流式 JSON
-  Control/                   X1～X5 GPIO 配置、快照与唯一模号识别
+  Hardware/                  X1～X5 GPIO 配置、快照与唯一模号识别
   System/                    双串口基础驱动、按键消抖时基
   Public/                    原厂 MCU 头、公共定义、板级配置
+  Objects/                   OBJ、HEX 和构建日志
+  Listings/                  Keil 与构建脚本的 LST、M51 分析输出
+  Datasheet/                 现有芯片资料
   Project.uvproj             Keil 工程
   .eide/                     EIDE 工程配置
 04 测试验证/                 Keil 构建脚本、串口样本和验证记录
 03 数据手册/                 STC12 数据手册（只保留一份纳入 Git）
+05 仿真/                     离线 3D 通讯演示、协议模型与自动验证
 ```
 
 公共类型和存储区宏集中在 Public_cfg.h；原厂 STC12C5A60S2.h 保持不变。自有 C 文件使用四空格、独立花括号、中文 `@brief / @param / @retval` 注释及内部/对外分区，参考 [RGBWIR4_PRS4_TestReader 的代码风格](https://github.com/happygithub1123/RGBWIR4_PRS4_TestReader)。
@@ -128,6 +134,8 @@ python "04 测试验证/build_keil.py"
 构建脚本默认使用 `D:/Keil_v5`，可用 `--keil` 指定路径。时钟与串口参数固定在工程中。2026-10-29 按要求移除电脑模拟支持及配套测试脚本，当前源码仅用于 MCU 构建；功能验证使用实际板卡和串口样本。
 
 Keil 与构建脚本的 HEX 输出到 `02 软件源码/顺天祥协议转换/Objects/Bridge828C.hex`，仅在本地保留；EIDE 的输出根目录同样为 Objects，其构建器会在其中按目标建立子目录。以本次构建退出成功和日志为准；失败时旧 HEX 可能仍存在。旧 Project.hex、旧构建缓存及临时日志已清理，当前固件保留。下次编译会重新生成所需 OBJ、列表和日志文件。
+
+2026-10-30 按现有文件整理分层：GPIO 驱动位于 Hardware，UART 和系统计时位于 System；没有独立控制模块，因此不保留 Control 分组。Keil 与构建脚本的 LST、M51 输出到 Listings，EIDE 产物继续由其构建器管理。当前工作区的 User/STARTUP.A51 已删除，整理保留该状态；C 文件可编译检查，完整固件构建因缺少启动文件而受阻。
 
 ## 验证状态
 

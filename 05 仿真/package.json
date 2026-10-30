@@ -1,0 +1,8 @@
+{
+  "name": "stc12-communication-simulation",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": { "start": "node server.mjs", "test": "node --test tests/protocol.test.js tests/server.test.js" },
+  "engines": { "node": ">=20" }
+}

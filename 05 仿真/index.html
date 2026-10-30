@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d171e">
+  <title>STC12 · 通讯实验室</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="src/ui/style.css">
+  <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/"}}</script>
+  <script type="module" src="src/main.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    <div class="brand"><h1>STC12 <span>通讯实验室</span></h1><p>828C 协议转换 · 交互式 3D 演示</p></div>
+    <div class="header-meta"><span class="status-dot"></span>本地离线 <span class="divider">/</span> 115200 · 8N1 <span class="version">SIM / 01</span></div>
+  </header>
+
+  <main class="workspace">
+    <section class="visual-column" aria-label="三维通讯演示">
+      <div class="scene-toolbar"><div><span class="eyebrow">COMMUNICATION TOPOLOGY</span><h2>从启动指令，到一条 JSON</h2></div><div class="view-buttons"><button id="overview" class="view active">全景</button><button id="chip-view" class="view">芯片内部</button></div></div>
+      <div id="viewport" class="viewport">
+        <canvas id="scene" aria-label="上位机、STC12 转换板与测试主板三维场景">需要支持 WebGL2 的浏览器。</canvas>
+        <div id="world-labels" class="world-labels"></div>
+        <div class="scene-note"><span class="tiny-cross">＋</span> 拖动旋转 · 滚轮缩放 · 点击数据包查看字节</div>
+        <div class="scene-legend"><span class="legend-host">UART2 / 上位机</span><span class="legend-board">UART1 / 主板</span></div>
+        <div id="webgl-error" class="webgl-error" hidden><h3>3D 场景暂时不可用</h3><p>请使用支持 WebGL2 的 Chrome 或 Edge，并检查浏览器硬件加速设置。协议操作与日志仍可使用。</p></div>
+      </div>
+
+      <div class="connection-key" aria-label="串口接线说明"><div><b>UART2</b><span>上位机 TX → P1.2 / RXD2<br>P1.3 / TXD2 → 上位机 RX</span></div><div><b>UART1</b><span>P3.1 / TXD → 主板 RX<br>主板 TX → P3.0 / RXD</span></div><div><b>GPIO</b><span>X1～X5 / P3.2～P3.6<br>低电平有效 · 串口共地</span></div></div>
+      <div class="pipeline-heading"><span>芯片内部 · 逻辑处理示意</span><span id="state-name">APP_IDLE</span></div>
+      <div id="pipeline" class="pipeline" aria-label="芯片处理步骤">
+        <div data-stage="0"><b>01</b><span>串口接收</span><small>RX interrupt</small></div><i>→</i>
+        <div data-stage="1"><b>02</b><span>接收缓存</span><small>逻辑缓存</small></div><i>→</i>
+        <div data-stage="2"><b>03</b><span>主循环解析</span><small>校验 / 会话</small></div><i>→</i>
+        <div data-stage="3"><b>04</b><span>JSON 编码</span><small>仅上传首组</small></div><i>→</i>
+        <div data-stage="4"><b>05</b><span>串口发送</span><small>TX → CRLF</small></div>
+      </div>
+
+      <section class="playback" aria-label="播放控制">
+        <div class="transport"><button id="play" class="button primary">▶ 播放</button><button id="step" class="button">单步 →</button><button id="reset" class="button quiet">重置</button></div>
+        <label class="speed">演示速度 <select id="speed" aria-label="演示速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+        <span class="clock">T <output id="clock">0.000</output> <small>ms</small></span>
+      </section>
+
+      <section class="data-panel" aria-label="数据转换对照">
+        <div class="section-line"><h2>数据转换对照</h2><span id="record-result" class="badge">等待完整记录</span></div>
+        <div class="data-grid"><div><span class="field-label">主板完整记录</span><pre id="record-input">等待主板发送一条完整记录…</pre></div><div><span class="field-label">首组提取</span><pre id="record-first">—</pre></div></div>
+        <div class="json-output"><span class="field-label">上传上位机 · 帧尾 CRLF</span><pre id="record-json">—</pre></div>
+      </section>
+    </section>
+
+    <aside class="control-column" aria-label="仿真控制">
+      <section class="control-section scenarios"><div class="section-line"><h2>场景演示</h2><span class="section-index">01 /</span></div><select id="scenario" aria-label="选择演示场景"></select><p id="scenario-description"></p><button id="demo" class="button primary wide">▶ 一键演示</button></section>
+      <section class="control-section"><div class="section-line"><h2>治具输入</h2><span class="section-index">02 /</span></div><p class="helper">低电平有效 · X1～X4 必须唯一接低</p><div class="input-switches">
+        <label><input type="checkbox" id="x1" checked><span>X1<small>P3.2</small></span><b>低</b></label>
+        <label><input type="checkbox" id="x2"><span>X2<small>P3.3</small></span><b>高</b></label>
+        <label><input type="checkbox" id="x3"><span>X3<small>P3.4</small></span><b>高</b></label>
+        <label><input type="checkbox" id="x4"><span>X4<small>P3.5</small></span><b>高</b></label>
+      </div><div class="module-status"><span>实际模号 <strong id="actual-module">1</strong></span><span>会话 MH <strong id="locked-module">—</strong></span></div>
+        <div class="x5-row"><div><strong>X5 启动按键</strong><small>P3.6 · 稳定 20 ms</small></div><span id="x5-state" class="badge">已松开</span></div>
+        <div class="button-row"><button id="x5-tap" class="button">点按 100 ms</button><button id="x5-down" class="button quiet">按住</button><button id="x5-up" class="button quiet">释放</button></div>
+      </section>
+      <section class="control-section"><div class="section-line"><h2>上位机指令</h2><span class="section-index">03 /</span></div><div class="button-row"><button id="rd-num" class="button">RD_NUM</button><select id="start-module" aria-label="START 模号"><option value="1">模号 1</option><option value="2">模号 2</option><option value="3">模号 3</option><option value="4">模号 4</option></select><button id="send-start" class="button accent">START</button><button id="send-ok" class="button quiet">OK</button></div><label class="field-label" for="command">自定义命令 / 分段</label><div class="send-row"><input id="command" type="text" value="(START,1)" spellcheck="false"><button id="send-command" class="button" aria-label="发送自定义命令">发送</button></div></section>
+      <section class="control-section"><div class="section-line"><h2>测试主板数据</h2><span class="section-index">04 /</span></div><label class="sr-only" for="board-data">主板记录或片段</label><textarea id="board-data" rows="3" spellcheck="false">Open,10.0,0.0, ohm,(8-78=978.4,9-84=992.2,),NG</textarea><div class="button-row ending-row"><label>行结束 <select id="line-ending"><option value="crlf">CRLF</option><option value="cr">CR</option><option value="lf">LF</option><option value="none">不追加</option></select></label><button id="send-end" class="button quiet">发送 end</button><button id="send-board" class="button accent">发送记录</button></div></section>
+    </aside>
+
+    <section class="log-panel" aria-label="串口事件日志"><div class="log-heading"><div><h2>通讯事件 <span id="event-count">000</span></h2><p id="current-event" aria-live="polite">就绪 · 选择场景或手动操作</p></div><div class="log-actions"><label><input type="checkbox" id="wire-only">仅串口</label><button id="clear-log" class="button quiet">清空日志</button></div></div><div id="event-log" class="event-log" role="log" aria-label="通讯记录"></div></section>
+  </main>
+  <footer><span>STC12C5A60S2 · 22.1184 MHz</span><span>协议行为仿真 / 内部结构与动画时间为逻辑示意 / 不连接实际串口</span><a href="README.md" target="_blank" rel="noopener">使用说明 ↗</a></footer>
+  <dialog id="packet-dialog"><div class="section-line"><h2>数据包详情</h2><button id="close-dialog" class="button quiet">关闭 ×</button></div><p id="packet-meta"></p><span class="field-label">原始文本 · CR / LF 可见</span><pre id="packet-text"></pre><span class="field-label">UTF-8 字节 · 十六进制</span><pre id="packet-hex"></pre></dialog>
+</body>
+</html>

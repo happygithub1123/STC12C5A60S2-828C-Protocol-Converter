@@ -9,7 +9,7 @@
 - 活动模号断开、改号或多路低时一次 ERR 并停测，接回不自动恢复；再次有效按键或新的匹配 START 才能恢复。正常 end 结束上传及旧模号监测。
 - RD_NUM 按当前输入返回 `{"Result":"x"}\r\n`（x 为 1～4），输入无效返回 ERR；查询不启动会话。
 - 每条完整主板记录上传一条 JSON，非空值只输出首组 `测点=实测值 单位:结果`。不设置首帧或帧间超时。
-- Control 负责五路 GPIO 配置和快照；App 负责按键消抖、命令、会话与转换；System 负责串口和 Timer0 约 1 ms 消抖时基。Timer0 使用内部计时，不占用 P3.4，不启用外部中断。
+- Hardware 负责五路 GPIO 配置和快照；App 负责按键消抖、命令、会话与转换；System 负责串口和 Timer0 约 1 ms 消抖时基。Timer0 使用内部计时，不占用 P3.4，不启用外部中断。
 - Public_cfg.h 集中公共类型和存储区宏；board_config.h 保存固定时钟、容量及 20 ms 消抖配置；原厂 MCU 头文件保持原样。
 
 打开 Project.uvproj，构建唯一目标 **828C Protocol Conversion Project**；EIDE 使用同名目标。内部 RC 在 STC-ISP 中设为 22.1184 MHz。
@@ -22,36 +22,38 @@ python "04 测试验证/build_keil.py"
 
 成功构建的 HEX 为 Objects/Bridge828C.hex，EIDE 输出根目录同为 Objects。构建中间文件和自动日志不纳入 Git，当前程序和 HEX 保留本地。
 
+当前工作区的 User/STARTUP.A51 已删除，本次整理保留该状态。全部 C 文件仍可编译检查，但完整固件的汇编、链接和 HEX 生成受此缺失阻碍；已有 HEX 不代表本次构建成功。
+
 历史版本曾通过 **152 项主机测试**，Keil／µVision 均零错误、零警告；data=126、xdata=884、code=5233 字节，静态栈余量 131 字节。2026-10-29 按要求移除电脑模拟支持及配套测试脚本，当前仅保留 MCU 代码、Keil 构建和实板验证资料。历史测试不代表本次重新执行的结果，变更及构建结果见 [程序编写验证记录](../../04%20测试验证/程序编写验证记录.md)。
 
 ## 文件夹与文件说明
 
-以下说明基于 2026-10-28 的目录检查，并于 2026-10-29 更新电脑模拟移除后的源码职责。Objects 中的产物和 Hardware 空目录属于本地状态，不代表 GitHub 必然存在这些内容。
+以下说明于 2026-10-30 按现有文件更新：GPIO 放 Hardware，UART 与计时放 System；不拆分现有应用代码，也不补建未使用模块。
 
 ### 各文件夹职责
 
 | 文件夹 | 主要内容 | 职责 |
 | --- | --- | --- |
-| User | main.c、STARTUP.A51 | 程序启动和主循环。启动汇编关闭中断、清理内部 RAM、设置堆栈并进入 C 运行环境；main 依次初始化系统、输入及应用，再打开总中断并循环调用 AppComm_Poll。 |
+| User | main.c | 程序入口和主循环。main 依次初始化系统、输入及应用，再打开总中断并循环调用 AppComm_Poll；当前缺少启动汇编支持。 |
 | App | app_comm.c、app_comm.h | 核心业务层。处理上位机命令、X5 消抖、测试会话、主板记录解析、JSON 流式输出和异常恢复；头文件公开应用接口、状态及调试错误码。 |
-| Control | input_control.c、input_control.h | 输入采集层。配置 X1～X5（P3.2～P3.6），一次读取端口形成输入快照，并从 X1～X4 识别唯一有效模号。按键消抖由 App 完成。 |
-| System | System.c/.h、Uart1.c/.h、Uart2.c/.h | 底层驱动层。负责时钟分频、双串口初始化、接收环形缓冲、溢出检测、非阻塞发送，以及 Timer0 约 1 ms 消抖时基。 |
+| Hardware | input_control.c、input_control.h | 硬件 IO 层。配置 X1～X5（P3.2～P3.6），一次读取端口形成输入快照，并从 X1～X4 识别唯一有效模号。按键消抖由 App 完成。 |
+| System | System.c/.h、Uart1.c/.h、Uart2.c/.h | 系统底层驱动。负责时钟分频、Timer0 约 1 ms 时基、毫秒计数，以及双串口初始化、环形缓冲、非阻塞发送和串口中断。 |
 | Public | Public_cfg.h、board_config.h、STC12C5A60S2.h | 公共类型、存储区宏、容量与消抖配置、MCU 寄存器定义。 |
-| Hardware | 本地为空 | 尚未承载驱动文件，也未作为源码分组加入工程。现有底层代码位于 System 和 Control。 |
-| Objects | HEX、OBJ、LST、M51、构建日志及 EIDE 目标子目录 | 构建输出，可重新生成。实际内容随构建方式和时间变化，由 .gitignore 排除。 |
-| Listings | 本地仅有 .gitkeep | 占位目录；Keil 当前的 ListingPath 指向 Objects，列表文件实际生成在那里。 |
+| Objects | HEX、OBJ、构建日志及 EIDE 目标子目录 | 编译输出，可重新生成；EIDE 按自身方式管理目标子目录和构建产物。由 .gitignore 排除。 |
+| Listings | LST、M51 等分析文件 | Keil 与构建脚本的列表和链接映射输出；由 .gitignore 排除。 |
+| Datasheet | STC12C5A60S2-35I-PDIP40.PDF | 现有芯片资料，不参与编译。 |
 | .eide | eide.yml、files.options.yml | EIDE 工程目标、源码分组、包含路径、Keil C51 工具链及编译选项；files.options.yml 当前没有逐文件附加参数。 |
 | .vscode | tasks.json | VS Code 的 build、flash、build and flash、rebuild、clean 任务入口，调用 EIDE 对应命令。 |
 
-Git 不保存空目录，因此本地为空的 Hardware 不一定显示在仓库网页中；占位文件所在目录是否上传仍受忽略规则约束。
+当前没有独立的 Control 模块，工程中不保留空的 Control 分组；以后存在实际控制模块时再添加。
 
 ### 程序运行关系
 
 ```text
-User/STARTUP.A51
-  └─ C 运行环境 → User/main.c
+启动支持（当前缺少 User/STARTUP.A51）
+  └─ C 运行环境 → User/main.c（以下为源码调用顺序）
        ├─ Sys_Init()           System：串口、时钟分频、Timer0
-       ├─ InputControl_Init()  Control：X1～X5 输入
+       ├─ InputControl_Init()  Hardware：X1～X5 输入
        ├─ AppComm_Init()       App：协议与会话状态
        └─ EA = 1；循环 AppComm_Poll()
             ├─ 输入快照、模号监测与 X5 消抖
@@ -69,17 +71,17 @@ UART1 使用 P3.0 接收、P3.1 发送，连接主板；UART2 使用 P1.2 接收
 - Public_cfg.h 定义 C51 的 uint8、uint16，以及 XDATA、IDATA、CODE 存储区宏，并包含原厂 MCU 寄存器定义。
 - board_config.h 集中配置：时钟 22.1184 MHz、UART1 接收数组 768 字节、UART2 接收数组 64 字节、主板单行上限 511 字节、名称上限 31 字节、单位上限 8 字节、命令上限 23 字节、X5 消抖 20 ms。
 - 环形缓冲各保留一个空槽，实际可存放量为 UART1 767 字节、UART2 63 字节。
-- Control 直接访问 P3、P3M0、P3M1；串口驱动直接访问硬件寄存器并使用真实中断入口。电脑模拟变量、接收注入接口和条件编译分支已移除。
+- Hardware 直接访问 P3、P3M0、P3M1；System 中的串口驱动直接访问硬件寄存器并使用真实中断入口。电脑模拟变量、接收注入接口和条件编译分支已移除。
 
-### Objects 编译产物
+### Objects 与 Listings 编译产物
 
 | 文件或类型 | 用途 |
 | --- | --- |
 | Bridge828C.hex | Keil 构建生成的烧录固件。 |
 | Bridge828C（无扩展名） | Keil 链接生成的程序文件，含调试信息。 |
 | *.obj | 各源码编译或汇编后的目标文件。 |
-| *.lst | 编译、汇编列表，供检查生成代码。 |
-| Bridge828C.m51 | 链接映射，包含内存分配、符号及调用关系等信息。 |
+| Listings/*.lst | 编译、汇编列表，供检查生成代码。 |
+| Listings/Bridge828C.m51 | 链接映射，包含内存分配、符号及调用关系等信息。 |
 | Bridge828C.lnp | 链接器输入参数。 |
 | Bridge828C.build_log.htm | µVision 构建日志。 |
 | 828C Protocol Conversion Project/ | EIDE 目标目录，含 builder.params、compile_commands.json、ref.json、.lock 等辅助文件。 |
@@ -104,4 +106,4 @@ UART1 使用 P3.0 接收、P3.1 发送，连接主板；UART2 使用 P1.2 接收
 1. **时钟一致性**：Project.uvproj 的 Cpu 字段含 CLOCK(45000000)，源码与串口、Timer0 设置按 22.1184 MHz 工作。该字段不能代替 ISP 对内部 RC 的设置；运行和仿真时应分别核对相应时钟配置。
 2. **本机 EIDE 差异**：本次检查发现本地 .eide/eide.yml 增加了 D:/Keil_v5/C51/INC/STC 路径，并将 linker.misc-controls 清空；仓库原配置保留 RAMSIZE(256)、XDATA(0000H-03FFH)、CODE(0000H-0EFFFH) 边界。这些已有本机改动未随本次文档更新提交。换电脑或使用本机配置构建时，需要核对工具链路径和链接内存边界。
 3. **烧录入口**：tasks.json 提供烧录任务，但当前 EIDE 自定义上传器的命令为空，使用前需配置实际烧录工具和参数。
-4. **阅读和修改顺序**：建议先读 User，再看 Public、Control、System，最后阅读 App。改协议、JSON 格式或测试流程主要看 App；改输入映射看 Control；改串口和计时看 System；改容量与消抖参数看 Public/board_config.h。
+4. **阅读和修改顺序**：建议先读 User，再看 Public、Hardware、System，最后阅读 App。改协议、JSON 格式或测试流程主要看 App；改输入映射看 Hardware；改串口和计时看 System；改容量与消抖参数看 Public/board_config.h。

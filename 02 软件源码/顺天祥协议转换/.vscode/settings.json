@@ -1,0 +1,22 @@
+{
+    "python.defaultInterpreterPath": "E:/WORK（2026）/测试治具/STC12C5A60S2协议转换/02 软件源码/顺天祥协议转换/.venv/Scripts/python.exe",
+    "python.terminal.activateEnvironment": true,
+    "terminal.integrated.defaultProfile.windows": "PowerShell (项目 Python)",
+    "terminal.integrated.profiles.windows": {
+        "PowerShell (项目 Python)": {
+            "path": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+            "args": ["-NoLogo"]
+        }
+    },
+    "terminal.integrated.env.windows": {
+        "Path": "E:/WORK（2026）/测试治具/STC12C5A60S2协议转换/02 软件源码/顺天祥协议转换/.venv/Scripts;D:/Python312;D:/Python312/Scripts;C:/Windows/System32/WindowsPowerShell/v1.0;${env:Path}",
+        "PYTHONUTF8": "1"
+    },
+    "python-envs.pythonProjects": [
+        {
+            "path": ".",
+            "envManager": "ms-python.python:venv",
+            "packageManager": "ms-python.python:pip"
+        }
+    ]
+}

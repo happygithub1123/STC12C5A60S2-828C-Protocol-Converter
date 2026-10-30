@@ -5,6 +5,7 @@
 /.eide.usr.ctx.json
 
 # project out
+/.venv/
 /build
 /bin
 /obj

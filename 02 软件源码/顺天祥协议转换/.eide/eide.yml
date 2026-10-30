@@ -3,7 +3,8 @@ name: Project
 type: C51
 deviceName: STC12C5A60S2
 packDir: null
-srcDirs: []
+srcDirs:
+  - Datasheet
 virtualFolder:
   name: <virtual_root>
   files: []
@@ -11,17 +12,11 @@ virtualFolder:
     - name: User
       files:
         - path: User/main.c
-        - path: User/STARTUP.A51
       folders: []
     - name: App
       files:
         - path: App/app_comm.c
         - path: App/app_comm.h
-      folders: []
-    - name: Control
-      files:
-        - path: Control/input_control.c
-        - path: Control/input_control.h
       folders: []
     - name: System
       files:
@@ -35,8 +30,13 @@ virtualFolder:
     - name: Public
       files:
         - path: Public/STC12C5A60S2.h
-        - path: Public/Public_cfg.h
         - path: Public/board_config.h
+        - path: Public/Public_cfg.h
+      folders: []
+    - name: Hardware
+      files:
+        - path: Hardware/input_control.c
+        - path: Hardware/input_control.h
       folders: []
 dependenceList: []
 outDir: Objects
@@ -46,7 +46,13 @@ targets:
   828C Protocol Conversion Project:
     cppPreprocessAttrs:
       defineList: []
-      incList: [User, App, Control, System, Public]
+      incList:
+        - D:/Keil_v5/C51/INC/STC
+        - User
+        - App
+        - Hardware
+        - System
+        - Public
       libList: []
     excludeList: []
     settings:
@@ -66,7 +72,7 @@ targets:
             ram-mode: SMALL
             rom-mode: LARGE
           linker:
-            misc-controls: "RAMSIZE(256) XDATA(0000H-03FFH) CODE(0000H-0EFFFH)"
+            misc-controls: ""
             output-format: elf
             remove-unused: true
     uploadConfigMap:
